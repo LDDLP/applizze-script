@@ -1,7 +1,7 @@
-// ==UserScript==
+ // ==UserScript==
 // @name         Le Dôme De La Paix - Fourmizzz S5 (Ressources, Armee & Commerce)
 // @namespace    https://s5.fourmizzz.fr/
-// @version      0.5.12-worker
+// @version      0.5.17-worker
 // @updateURL    https://raw.githubusercontent.com/LDDLP/applizze-script/main/fourmizzz.user.js
 // @downloadURL  https://raw.githubusercontent.com/LDDLP/applizze-script/main/fourmizzz.user.js
 // @description  Outils d'alliance centralisés : chasses & attaques entrantes (Ressources), détection d'attaques (Armee), et convois (Commerce) avec relai Worker.
@@ -161,6 +161,12 @@
       .replace(/\([^)]*\)/g, "")
       .trim()
       .toLowerCase();
+  }
+
+  function samePseudo(a, b) {
+    const x = normalizePseudo(a);
+    const y = normalizePseudo(b);
+    return !!x && x === y;
   }
 
   function esc(s) {
@@ -1034,10 +1040,27 @@
     };
   }
 
-  function hasActiveDelivery(r, now = Date.now()) {
-    return (r.deliveries || []).some(
-      (d) => Number(d.arrivalAt || 0) > now || Number(d.wood || 0) > 0 || Number(d.apples || 0) > 0
+  function isPartialRequest(r) {
+    const del = reqDelivered(r);
+    return r.status !== "done" && (del.wood > 0 || del.apples > 0);
+  }
+
+  function getActiveDeliveryArrivalAt(r, now = Date.now()) {
+    const futureTimes = (r.deliveries || [])
+      .map((d) => Number(d && d.arrivalAt || 0))
+      .filter((t) => Number.isFinite(t) && t > now);
+    if (!futureTimes.length) return 0;
+    return Math.min(...futureTimes);
+  }
+
+  function getOngoingDirectConvoys(now = Date.now()) {
+    return readJsonArray(STORAGE_KEYS.movements).filter(
+      (m) => m && m.type === "convoy" && Number(m.arrivalAt || 0) > now
     );
+  }
+
+  function isOwnRequest(r, currentUser) {
+    return samePseudo(r && r.player, currentUser) || samePseudo(r && r.createdBy, currentUser);
   }
 
   function clampNonNegativeInt(raw) {
@@ -1116,7 +1139,7 @@
       .ddp-btn-mini{background:#374151;color:#fff;border:1px solid #6b7280;border-radius:6px;padding:4px 8px;cursor:pointer;font-size:12px}
       .ddp-tabs,.ddp-filters{display:grid;gap:6px;margin-bottom:10px}
       .ddp-tabs{grid-template-columns:1fr 1fr}
-      .ddp-filters{grid-template-columns:repeat(3,1fr)}
+      .ddp-filters{grid-template-columns:1fr 1fr}
       .ddp-tab,.ddp-filter,.ddp-btn{padding:7px 6px;border-radius:7px;border:1px solid #4b5563;background:#111827;color:#e5e7eb;cursor:pointer;font-weight:bold;font-size:12px;text-align:center}
       .ddp-tab.active,.ddp-filter.active{background:#374151;border-color:#9ca3af;color:#fff}
       .ddp-btn.primary{background:#166534;border-color:#15803d;width:100%;margin-top:8px}
@@ -1128,9 +1151,10 @@
       .ddp-card.done{border-left-color:#22c55e;opacity:.75}
       .ddp-muted{color:#9ca3af;font-size:12px}
       .ddp-label{display:block;color:#9ca3af;font-size:12px;margin-top:8px}
-      .ddp-tag{font-size:11px;padding:2px 7px;border-radius:10px;background:#374151;color:#fff}
+      .ddp-tag{display:inline-block;white-space:nowrap;font-size:11px;padding:2px 7px;border-radius:10px;background:#374151;color:#fff}
       .ddp-tag.done{background:#166534}
       .ddp-tag.taken{background:#854d0e}
+      .ddp-tag.transit{background:#1d4ed8}
       .ddp-actions{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
       .ddp-actions button{flex:1;min-width:90px}
       .ddp-msg{margin-top:8px;font-size:12px;color:#86efac}
@@ -1166,6 +1190,7 @@
     }
 
     const devUser = getDevUser();
+    if (convoyFilter === "done") convoyFilter = "open";
     const isMin = box.classList.contains("ddp-minimized");
     if (isMin) {
       box.innerHTML = `<button class="ddp-btn-mini" id="ddp-restore" type="button">🚚 Convois (${esc(devUser)})</button>`;
@@ -1177,87 +1202,135 @@
     }
 
     const now = Date.now();
-    const openCount = convoyRequests.filter((r) => r.status !== "done").length;
+    const activeRequests = convoyRequests.filter((r) => r.status !== "done");
+    const openCount = activeRequests.length;
+    const ongoingDirectConvoys = getOngoingDirectConvoys(now);
 
     let bodyHtml = "";
     if (convoyTab === "requests") {
-      let filtered = convoyRequests
-        .slice()
-        .sort((a, b) => (a.status === "done") - (b.status === "done") || a.createdAt - b.createdAt);
+      let cardsHtml = "";
 
-      if (convoyFilter === "open") filtered = filtered.filter((r) => r.status !== "done");
-      else if (convoyFilter === "done") filtered = filtered.filter((r) => r.status === "done");
-      else if (convoyFilter === "ongoing") {
-        filtered = filtered.filter((r) => r.status !== "done" && hasActiveDelivery(r, now));
-      }
+      if (convoyFilter === "ongoing") {
+        const partialCards = activeRequests
+          .filter((r) => isPartialRequest(r))
+          .sort((a, b) => a.createdAt - b.createdAt)
+          .map((r) => {
+            const rem = reqRemaining(r);
+            const del = reqDelivered(r);
+            const activeArr = getActiveDeliveryArrivalAt(r, now);
+            const leftSec = activeArr > 0 ? Math.max(0, Math.ceil((activeArr - now) / 1000)) : 0;
 
-      const cardsHtml = !filtered.length
-        ? `<div class="ddp-muted">Aucune demande dans cette vue.</div>`
-        : filtered
-            .map((r) => {
-              const done = r.status === "done";
-              const rem = reqRemaining(r);
-              const del = reqDelivered(r);
-              const tag = done
-                ? `<span class="ddp-tag done">📦 Archivée</span>`
-                : del.wood || del.apples
+            const deliveriesSummary =
+              Array.isArray(r.deliveries) && r.deliveries.length
+                ? `<div class="ddp-muted" style="margin-top:4px">🚚 Envoyé : ${r.deliveries
+                    .map((d) => `${esc(d.by || d.loggedBy || "Joueur")} (🪵 ${formatNumber(d.wood)} · 🍎 ${formatNumber(d.apples)})`)
+                    .join(", ")}</div>`
+                : "";
+
+            const headerTransitBadge = activeArr > 0
+              ? `<span class="ddp-tag transit">🚚 En route (<span data-cd="${activeArr}">${formatDuration(leftSec)}</span>)</span>`
+              : "";
+
+            return `
+              <div class="ddp-card">
+                <div class="ddp-head">
+                  <b>${esc(r.player)}</b>
+                  <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap"><span class="ddp-tag taken">🚚 Partielle</span>${headerTransitBadge}</div>
+                </div>
+                <div>🪵 ${formatNumber(r.wood)} · 🍎 ${formatNumber(r.apples)} <span class="ddp-muted">(reste 🪵 ${formatNumber(rem.wood)} · 🍎 ${formatNumber(rem.apples)})</span></div>
+                ${deliveriesSummary}
+                ${r.note ? `<div class="ddp-muted" style="margin-top:4px">💬 ${esc(r.note)}</div>` : ""}
+              </div>
+            `;
+          })
+          .join("");
+
+        const convoyCards = ongoingDirectConvoys
+          .sort((a, b) => Number(a.arrivalAt || 0) - Number(b.arrivalAt || 0))
+          .map((m) => {
+            const arrAt = Number(m.arrivalAt || 0);
+            const leftSec = Math.max(0, Math.ceil((arrAt - now) / 1000));
+            const fromName = (m.from && m.from.name) || m.createdBy || "Joueur";
+            const toName = (m.to && m.to.name) || "Destinataire";
+            return `
+              <div class="ddp-card">
+                <div class="ddp-head"><b>${esc(fromName)} → ${esc(toName)}</b><span class="ddp-tag transit">🚚 En route (<span data-cd="${arrAt}">${formatDuration(leftSec)}</span>)</span></div>
+                <div>🪵 ${formatNumber(m.wood)} · 🍎 ${formatNumber(m.apples)}</div>
+              </div>
+            `;
+          })
+          .join("");
+
+        cardsHtml = partialCards + convoyCards || `<div class="ddp-muted">Aucun convoi partiel ou en cours de livraison.</div>`;
+      } else {
+        const filtered = activeRequests
+          .slice()
+          .sort((a, b) => a.createdAt - b.createdAt);
+
+        cardsHtml = !filtered.length
+          ? `<div class="ddp-muted">Aucune demande dans cette vue.</div>`
+          : filtered
+              .map((r) => {
+                const rem = reqRemaining(r);
+                const del = reqDelivered(r);
+                const ownReq = isOwnRequest(r, devUser);
+                const tag = del.wood || del.apples
                   ? `<span class="ddp-tag taken">🚚 Partielle</span>`
                   : `<span class="ddp-tag">🟦 Ouverte</span>`;
 
-              const dr = convoyDrafts[r.id] || {};
-              const wVal = dr.wood !== undefined ? dr.wood : rem.wood || 0;
-              const aVal = dr.apples !== undefined ? dr.apples : rem.apples || 0;
+                const dr = convoyDrafts[r.id] || {};
+                const wVal = dr.wood !== undefined ? dr.wood : rem.wood || 0;
+                const aVal = dr.apples !== undefined ? dr.apples : rem.apples || 0;
 
-              const deliveriesSummary =
-                Array.isArray(r.deliveries) && r.deliveries.length
-                  ? `<div class="ddp-muted" style="margin-top:4px">🚚 Envoyé : ${r.deliveries
-                      .map((d) => `${esc(d.by || d.loggedBy || "Joueur")} (🪵 ${formatNumber(d.wood)} · 🍎 ${formatNumber(d.apples)})`)
-                      .join(", ")}</div>`
-                  : "";
+                const deliveriesSummary =
+                  Array.isArray(r.deliveries) && r.deliveries.length
+                    ? `<div class="ddp-muted" style="margin-top:4px">🚚 Envoyé : ${r.deliveries
+                        .map((d) => `${esc(d.by || d.loggedBy || "Joueur")} (🪵 ${formatNumber(d.wood)} · 🍎 ${formatNumber(d.apples)})`)
+                        .join(", ")}</div>`
+                    : "";
 
-              const sendForm = !done
-                ? `
-                  <div class="ddp-grid" style="margin-top:8px">
-                    ${
-                      rem.wood > 0
-                        ? `<div><label class="ddp-label">🪵 Bois restant : ${formatNumber(rem.wood)}</label><input class="ddp-input" data-df="wood" data-did="${esc(r.id)}" data-max="${rem.wood}" type="number" min="0" max="${rem.wood}" value="${esc(wVal)}"></div>`
+                const sendForm = ownReq
+                  ? `<div class="ddp-muted" style="margin-top:8px;color:#fca5a5">🔒 Vous ne pouvez pas livrer votre propre demande.</div>`
+                  : `
+                    <div class="ddp-grid" style="margin-top:8px">
+                      ${
+                        rem.wood > 0
+                          ? `<div><label class="ddp-label">🪵 Bois restant : ${formatNumber(rem.wood)}</label><input class="ddp-input" data-df="wood" data-did="${esc(r.id)}" data-max="${rem.wood}" type="number" min="0" max="${rem.wood}" value="${esc(wVal)}"></div>`
+                          : ""
+                      }
+                      ${
+                        rem.apples > 0
+                          ? `<div><label class="ddp-label">🍎 Pommes restantes : ${formatNumber(rem.apples)}</label><input class="ddp-input" data-df="apples" data-did="${esc(r.id)}" data-max="${rem.apples}" type="number" min="0" max="${rem.apples}" value="${esc(aVal)}"></div>`
+                          : ""
+                      }
+                    </div>
+                    <div class="ddp-actions">
+                      <button class="ddp-btn max-btn" data-act="max" data-id="${esc(r.id)}" type="button">Max</button>
+                      <button class="ddp-btn primary" style="margin-top:0" data-act="send" data-id="${esc(r.id)}" type="button">🚚 Lancer convoi</button>
+                    </div>
+                  `;
+
+                return `
+                  <div class="ddp-card">
+                    <div class="ddp-head"><b>${esc(r.player)}</b>${tag}</div>
+                    <div>🪵 ${formatNumber(r.wood)} · 🍎 ${formatNumber(r.apples)}${
+                      del.wood || del.apples
+                        ? ` <span class="ddp-muted">(reste 🪵 ${formatNumber(rem.wood)} · 🍎 ${formatNumber(rem.apples)})</span>`
                         : ""
-                    }
-                    ${
-                      rem.apples > 0
-                        ? `<div><label class="ddp-label">🍎 Pommes restantes : ${formatNumber(rem.apples)}</label><input class="ddp-input" data-df="apples" data-did="${esc(r.id)}" data-max="${rem.apples}" type="number" min="0" max="${rem.apples}" value="${esc(aVal)}"></div>`
-                        : ""
-                    }
+                    }</div>
+                    ${deliveriesSummary}
+                    ${r.note ? `<div class="ddp-muted" style="margin-top:4px">💬 ${esc(r.note)}</div>` : ""}
+                    ${sendForm}
                   </div>
-                  <div class="ddp-actions">
-                    <button class="ddp-btn max-btn" data-act="max" data-id="${esc(r.id)}" type="button">Max</button>
-                    <button class="ddp-btn primary" style="margin-top:0" data-act="send" data-id="${esc(r.id)}" type="button">🚚 Lancer convoi</button>
-                    <button class="ddp-btn" data-act="archive" data-id="${esc(r.id)}" type="button">📦 Archiver</button>
-                  </div>
-                `
-                : `<div class="ddp-actions"><button class="ddp-btn danger" data-act="delete" data-id="${esc(r.id)}" type="button">🗑️ Supprimer</button></div>`;
-
-              return `
-                <div class="ddp-card ${done ? "done" : ""}">
-                  <div class="ddp-head"><b>${esc(r.player)}</b>${tag}</div>
-                  <div>🪵 ${formatNumber(r.wood)} · 🍎 ${formatNumber(r.apples)}${
-                    !done && (del.wood || del.apples)
-                      ? ` <span class="ddp-muted">(reste 🪵 ${formatNumber(rem.wood)} · 🍎 ${formatNumber(rem.apples)})</span>`
-                      : ""
-                  }</div>
-                  ${deliveriesSummary}
-                  ${r.note ? `<div class="ddp-muted" style="margin-top:4px">💬 ${esc(r.note)}</div>` : ""}
-                  ${sendForm}
-                </div>
-              `;
-            })
-            .join("");
+                `;
+              })
+              .join("");
+      }
 
       bodyHtml = `
         <div class="ddp-filters">
           <button class="ddp-filter ${convoyFilter === "open" ? "active" : ""}" data-cf="open" type="button">À traiter (${openCount})</button>
           <button class="ddp-filter ${convoyFilter === "ongoing" ? "active" : ""}" data-cf="ongoing" type="button">🚚 En cours</button>
-          <button class="ddp-filter ${convoyFilter === "done" ? "active" : ""}" data-cf="done" type="button">📦 Archives</button>
         </div>
         <div id="ddp-req-list">${cardsHtml}</div>
         <div class="ddp-card" style="margin-top:10px;border-left-color:#22c55e">
@@ -1431,22 +1504,15 @@
 
     box.querySelectorAll("button[data-act]").forEach((btn) => {
       btn.onclick = () => {
+        if (convoyFilter === "ongoing") return;
         const r = convoyRequests.find((item) => item.id === btn.dataset.id);
         if (!r) return;
         const act = btn.dataset.act;
-        if (act === "archive") {
-          r.status = "done";
-          r.doneAt = Date.now();
-          r.archivedBy = getDevUser();
-          saveConvoyRequestsLocal();
-          syncWithWorker({ kind: "requests", action: "archive", id: r.id, doneAt: r.doneAt }, false);
-          renderCommerceOverlay();
-        } else if (act === "delete") {
-          convoyRequests = convoyRequests.filter((item) => item.id !== r.id);
-          saveConvoyRequestsLocal();
-          syncWithWorker({ kind: "requests", action: "delete", id: r.id }, false);
-          renderCommerceOverlay();
-        } else if (act === "max") {
+        if (isOwnRequest(r, getDevUser())) {
+          setCommerceBanner(box, "🔒 Vous ne pouvez pas livrer votre propre demande.", true);
+          return;
+        }
+        if (act === "max") {
           const rem = reqRemaining(r);
           convoyDrafts[r.id] = {
             wood: rem.wood,
@@ -1547,7 +1613,7 @@
   }
 
   function tickCountdowns() {
-    if (!IS_RESSOURCES) return;
+    if (!IS_RESSOURCES && !IS_COMMERCE) return;
     const tNow = Date.now();
     let expired = false;
     document.querySelectorAll("[data-cd]").forEach((el) => {
@@ -1578,7 +1644,7 @@
     if (changed) runPageCycle();
   });
 
-  if (IS_RESSOURCES) {
+  if (IS_RESSOURCES || IS_COMMERCE) {
     setInterval(tickCountdowns, 1000);
   }
 
