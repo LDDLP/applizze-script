@@ -1,11 +1,11 @@
 // ==UserScript==
 // @name         Le Dôme De La Paix - Fourmizzz S5 (Ressources, Armee & Commerce)
 // @namespace    https://s5.fourmizzz.fr/
-// @version      0.5.23-worker
+// @version      0.5.26-worker
 // @updateURL    https://raw.githubusercontent.com/LDDLP/applizze-script/main/fourmizzz.user.js
 // @downloadURL  https://raw.githubusercontent.com/LDDLP/applizze-script/main/fourmizzz.user.js
-// @description  Outils d'alliance centralisés : chasses & attaques entrantes (Ressources), détection d'attaques (Armee & ennemie), convois (Commerce) et bulles flottantes globales avec relai Worker.
-// @match        *://*.fourmizzz.fr/*
+// @description  Outils d'alliance centralisés sur S5 : chasses, attaques entrantes avec TDC avant/après, convois et bulles flottantes globales avec relai Worker.
+// @match        *://s5.fourmizzz.fr/*
 // @grant        GM_xmlhttpRequest
 // @grant        GM_getValue
 // @grant        GM_setValue
@@ -15,7 +15,11 @@
 (function () {
   "use strict";
 
+  const HOST = window.location.hostname.toLowerCase();
+  if (HOST !== "s5.fourmizzz.fr") return;
+
   const PATH = window.location.pathname.toLowerCase();
+  const HREF = window.location.href.toLowerCase();
   const IS_RESSOURCES = PATH.includes("ressources.php");
   const IS_ARMEE = PATH.includes("armee.php");
   const IS_ENNEMIE = PATH.includes("ennemie.php");
@@ -24,7 +28,8 @@
 
   const SHORTCUT_LINKS = {
     discordUrl: "https://discord.com/app",
-    siteUrl: "https://applizzz.pages.dev/"
+    siteUrl: "https://applizzz.pages.dev/",
+    membersUrl: "https://s5.fourmizzz.fr/alliance.php?Membres"
   };
 
   const STORAGE_KEYS = {
@@ -37,6 +42,7 @@
     convoyLog: "fmz_local_convoy_log_v1",
     pendingCommerceFill: "fmz_pending_commerce_fill_v1",
     devUser: "fmz_local_dev_user_v1",
+    allianceTdc: "fmz_alliance_tdc_v1",
     authToken: "fmz_local_auth_token_v1",
     workerPass: "fmz_local_worker_pass_v1",
     bubbleOpen: "fmz_global_bubble_open_v1",
@@ -122,6 +128,142 @@
       nextRetryAt = 0;
     }
     return clean;
+  }
+
+  function readAllianceTdcMap() {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEYS.allianceTdc);
+      const parsed = JSON.parse(raw || "{}");
+      return parsed && typeof parsed === "object" ? parsed : {};
+    } catch (e) {
+      return {};
+    }
+  }
+
+  function writeAllianceTdcMap(mapObj) {
+    try {
+      localStorage.setItem(STORAGE_KEYS.allianceTdc, JSON.stringify(mapObj));
+    } catch (e) {}
+  }
+
+  function storePlayerTdc(pseudo, tdcVal, source = "page") {
+    const cleanPseudo = String(pseudo || "").replace(/\s+/g, " ").trim();
+    const norm = normalizePseudo(cleanPseudo);
+    const num = parseFrInt(tdcVal) ?? Number(tdcVal);
+    if (!norm || !Number.isFinite(num) || num <= 0) return false;
+
+    const map = readAllianceTdcMap();
+    map[norm] = {
+      pseudo: cleanPseudo,
+      tdc: Math.floor(num),
+      source,
+      updatedAt: Date.now()
+    };
+    writeAllianceTdcMap(map);
+    return true;
+  }
+
+  function isMembersPageView() {
+    if (PATH.includes("alliance.php") && HREF.includes("membres")) return true;
+    const bodyText = document.body ? document.body.innerText : "";
+    return /les\s+membres\s+de\s+l['’]alliance/i.test(bodyText) && /\bpseudo\b/i.test(bodyText) && /\bterrain\b/i.test(bodyText);
+  }
+
+  function scrapeAllianceMembersTdc() {
+    if (!document.body) return 0;
+    const map = readAllianceTdcMap();
+    const now = Date.now();
+    let count = 0;
+
+    const tables = Array.from(document.querySelectorAll("table"));
+    for (const tbl of tables) {
+      if (tbl.closest && tbl.closest("#fmz-gb-root")) continue;
+      const rows = Array.from(tbl.rows || []);
+      if (rows.length < 2) continue;
+
+      let pseudoColIdx = -1;
+      let terrainColIdx = -1;
+
+      const headerCells = Array.from(rows[0].cells || []).map((c) =>
+        (c.innerText || "").replace(/\s+/g, " ").trim().toLowerCase()
+      );
+      headerCells.forEach((h, idx) => {
+        if (h.includes("pseudo")) pseudoColIdx = idx;
+        if (h.includes("terrain") || h.includes("tdc")) terrainColIdx = idx;
+      });
+
+      if (pseudoColIdx === -1 && terrainColIdx === -1) continue;
+
+      for (let i = 1; i < rows.length; i++) {
+        const cells = Array.from(rows[i].cells || []);
+        if (cells.length < 2) continue;
+
+        const rawPseudo = pseudoColIdx >= 0 && cells[pseudoColIdx]
+          ? (cells[pseudoColIdx].innerText || "").replace(/\s+/g, " ").trim()
+          : "";
+        const rawTerrain = terrainColIdx >= 0 && cells[terrainColIdx]
+          ? (cells[terrainColIdx].innerText || "").replace(/\s+/g, " ").trim()
+          : "";
+
+        const norm = normalizePseudo(rawPseudo);
+        const tdcVal = parseFrInt(rawTerrain);
+        if (!norm || !Number.isFinite(tdcVal) || tdcVal <= 0) continue;
+
+        map[norm] = {
+          pseudo: rawPseudo,
+          tdc: Math.floor(tdcVal),
+          source: "alliance_page",
+          updatedAt: now
+        };
+        count++;
+      }
+    }
+
+    if (count > 0) {
+      map._lastScanAt = now;
+      writeAllianceTdcMap(map);
+    }
+    return count;
+  }
+
+  function ingestRemotePlayersTdc(remotePlayers) {
+    if (!Array.isArray(remotePlayers) || !remotePlayers.length) return;
+    const map = readAllianceTdcMap();
+    const now = Date.now();
+    let updated = false;
+
+    for (const p of remotePlayers) {
+      if (!p) continue;
+      const name = p.name || p.pseudo || p.player || "";
+      const norm = normalizePseudo(name);
+      const rawTdc = p.tdc ?? p.terrain ?? p.area ?? 0;
+      const num = parseFrInt(rawTdc) ?? Number(rawTdc);
+      if (!norm || !Number.isFinite(num) || num <= 0) continue;
+      if (!map[norm] || map[norm].source !== "alliance_page") {
+        map[norm] = {
+          pseudo: String(name).trim(),
+          tdc: Math.floor(num),
+          source: "worker",
+          updatedAt: now
+        };
+        updated = true;
+      }
+    }
+
+    if (updated) {
+      writeAllianceTdcMap(map);
+    }
+  }
+
+  function getPlayerTdc(pseudo) {
+    const norm = normalizePseudo(pseudo);
+    if (!norm) return null;
+    const map = readAllianceTdcMap();
+    const entry = map[norm];
+    if (entry && typeof entry.tdc === "number" && entry.tdc > 0) {
+      return Math.floor(entry.tdc);
+    }
+    return null;
   }
 
   function resetAccountSession(newPseudo = "") {
@@ -271,6 +413,7 @@
 
   function parseFrInt(str) {
     const cleaned = String(str || "").replace(/[\s\u00a0.,]/g, "");
+    if (!/^\d+$/.test(cleaned)) return null;
     const n = Number(cleaned);
     return Number.isSafeInteger(n) ? n : null;
   }
@@ -584,7 +727,7 @@
         type: "hunt",
         player: (m.from && m.from.name) || "Joueur",
         area: Number(m.area) || 0,
-        troops: Array.isArray(m.troops) ? m.troops : [],
+        troops: [],
         arrivalLabel: m.arrivalLabel || "",
         firstSeenAt: Number(m.startAt) || now,
         detectedAt: Number(m.startAt) || now,
@@ -698,6 +841,12 @@
       lastSyncUpdatedAt = data.updatedAt;
     }
 
+    if (Array.isArray(data.players)) {
+      ingestRemotePlayersTdc(data.players);
+    } else if (data.state && Array.isArray(data.state.players)) {
+      ingestRemotePlayersTdc(data.state.players);
+    }
+
     const allMovements = Array.isArray(data.movements) ? data.movements : [];
     mergeRemoteHunts(allMovements.filter((m) => m && m.type === "hunt"));
     mergeRemoteAttacks(allMovements.filter((m) => m && m.type === "attack"));
@@ -713,7 +862,6 @@
 
     return true;
   }
-
   function extractHuntsFromPage() {
     const now = Date.now();
     const playerName = getDevUser();
@@ -746,8 +894,6 @@
 
       const areaMatch = head.match(/conqu[eé]rir\s+([\d\s\u00a0.,]+)\s*cm(?:²|2)/i);
       const area = areaMatch ? parseFrInt(areaMatch[1]) : null;
-      const troopLine = blk.find((l) => /troupes\s+en\s+chasses?\s*:/i.test(l)) || "";
-      const troops = parseTroopsList(troopLine);
       const arrivalMatch = blk.join(" ").match(/arriv[ée]e?\s+((?:demain\s+)?à\s+\d{1,2}h\d{2})/i);
       const arrivalLabel = arrivalMatch ? arrivalMatch[1] : "";
 
@@ -755,8 +901,7 @@
       const sig = buildStableSig(
         [
           normalizePseudo(playerName),
-          area || 0,
-          troops.map((t) => `${t.quantity}:${t.name.toLowerCase()}`).join("|")
+          area || 0
         ],
         arrivalAt,
         arrivalLabel
@@ -768,7 +913,7 @@
         type: "hunt",
         player: playerName,
         area,
-        troops,
+        troops: [],
         arrivalLabel,
         firstSeenAt: now,
         detectedAt: now,
@@ -803,7 +948,7 @@
         const mergedItem = {
           ...prev,
           area: item.area ?? prev.area,
-          troops: item.troops.length ? item.troops : prev.troops,
+          troops: [],
           arrivalLabel: item.arrivalLabel || prev.arrivalLabel,
           firstSeenAt: Number(prev.firstSeenAt || prev.detectedAt || item.firstSeenAt || now),
           arrivalAt: diff < 30000 ? prev.arrivalAt : item.arrivalAt,
@@ -820,7 +965,20 @@
     const nextHunts = Array.from(bySig.values());
     archiveFinishedHunts(nextHunts, now);
     writeJsonArray(STORAGE_KEYS.hunts, nextHunts);
-    const myHunts = nextHunts.filter((h) => normalizePseudo(h.player) === normPlayer);
+    const myHunts = nextHunts
+      .filter((h) => normalizePseudo(h.player) === normPlayer)
+      .map((h) => ({
+        id: h.id,
+        sig: h.sig,
+        type: "hunt",
+        player: h.player,
+        area: h.area || 0,
+        arrivalLabel: h.arrivalLabel || "",
+        firstSeenAt: h.firstSeenAt,
+        detectedAt: h.detectedAt,
+        arrivalAt: h.arrivalAt,
+        active: true
+      }));
     syncWithWorker({ kind: "hunts", player: playerName, hunts: myHunts });
     return nextHunts;
   }
@@ -833,6 +991,21 @@
     return readJsonArray(STORAGE_KEYS.attacks)
       .filter((a) => a && a.arrivalAt > now && normalizePseudo(a.target) === meNorm)
       .sort((a, b) => Number(a.arrivalAt || 0) - Number(b.arrivalAt || 0));
+  }
+
+  function getAttackTdcSummary(attackItem) {
+    const targetPseudo = (attackItem && attackItem.target) || getDevUser();
+    const baseTdc = getPlayerTdc(targetPseudo) ?? getPlayerTdc(getDevUser());
+    if (!baseTdc || baseTdc <= 0) {
+      return { hasTdc: false, beforeTdc: null, afterTdc: null };
+    }
+    const huntArea = Number(attackItem && attackItem.area) || 0;
+    const afterTdc = huntArea > 0 ? Math.max(0, baseTdc - huntArea) : baseTdc;
+    return {
+      hasTdc: true,
+      beforeTdc: baseTdc,
+      afterTdc
+    };
   }
 
   function getAllActiveHunts(now = Date.now()) {
@@ -1216,16 +1389,17 @@
       : attacks
           .map((a) => {
             const leftSec = Math.max(0, Math.ceil((a.arrivalAt - now) / 1000));
-            const troopsText = Array.isArray(a.troops) && a.troops.length
-              ? a.troops.map((t) => `${formatNumber(t.quantity)} ${esc(t.name)}`).join(", ")
-              : a.ants ? `${formatNumber(a.ants)} fourmis` : "Troupes non détaillées";
+            const tdcInfo = getAttackTdcSummary(a);
+            const tdcLine = tdcInfo.hasTdc
+              ? `<div class="fmz-muted">📐 TDC avant : <b>${formatNumber(tdcInfo.beforeTdc)} cm²</b> · TDC après : <b>${formatNumber(tdcInfo.afterTdc)} cm²</b></div>`
+              : `<div class="fmz-muted">📐 TDC avant / après : <a class="fmz-gb-link" href="${esc(SHORTCUT_LINKS.membersUrl)}">Lire page Membres</a></div>`;
             return `
               <div class="fmz-item">
                 <div class="fmz-item-top">
                   <span>🐎 ${esc(a.attacker || "Inconnu")} → ${esc(a.target)}</span>
                   <span data-cd="${a.arrivalAt}">${formatDuration(leftSec)}</span>
                 </div>
-                <div class="fmz-muted">🐜 Troupes : ${troopsText}${a.ants ? ` (Total : ${formatNumber(a.ants)})` : ""}</div>
+                ${tdcLine}
                 <div class="fmz-muted">🕒 ${esc(a.arrivalLabel || new Date(a.arrivalAt).toLocaleTimeString("fr-FR"))}</div>
               </div>
             `;
@@ -1535,38 +1709,6 @@
       ok: true,
       message: `✓ Convoi enregistré vers ${dest.name}.`
     };
-  }
-
-  function renderSideDiscordTab() {
-    if (!document.body) return;
-    if (!document.getElementById("fmz-side-discord-style")) {
-      const style = document.createElement("style");
-      style.id = "fmz-side-discord-style";
-      style.textContent = `
-        #fmz-discord-tab{
-          position:fixed;left:0;top:42%;transform:translateY(-50%);z-index:9999;
-          background:#1f2937;color:#f9fafb;border:1px solid #4b5563;border-left:none;
-          border-radius:0 10px 10px 0;padding:8px 6px;text-decoration:none;
-          font-family:Arial,sans-serif;font-size:11px;font-weight:bold;
-          writing-mode:vertical-rl;text-orientation:mixed;
-          box-shadow:3px 4px 14px rgba(0,0,0,.5);
-          user-select:none;
-        }
-        #fmz-discord-tab:hover{background:#374151;color:#fff}
-      `;
-      document.head.appendChild(style);
-    }
-
-    if (!document.getElementById("fmz-discord-tab")) {
-      const tab = document.createElement("a");
-      tab.id = "fmz-discord-tab";
-      tab.href = SHORTCUT_LINKS.discordUrl;
-      tab.target = "_blank";
-      tab.rel = "noopener noreferrer";
-      tab.title = "Ouvrir Discord";
-      tab.textContent = "💬 Discord";
-      document.body.appendChild(tab);
-    }
   }
 
   function injectGlobalBubbleStyles() {
@@ -1924,14 +2066,14 @@
           const card = btn.closest("[data-cv-card]");
           const wInp = card?.querySelector('[data-cv-df="wood"]');
           const aInp = card?.querySelector('[data-cv-df="apples"]');
-          const res = deliverConvoyRequest({
+          setConvoyBubbleOpen(false);
+          renderGlobalBubble();
+          deliverConvoyRequest({
             requestId: r.id,
             rawWood: wInp ? wInp.value : 0,
             rawApples: aInp ? aInp.value : 0,
             redirectToCommerce: true
           });
-          lastCommerceMessage = res.message;
-          if (!res.redirected) renderGlobalBubble();
         }
       };
     });
@@ -1939,7 +2081,6 @@
 
   function renderGlobalBubble() {
     if (!document.body) return;
-    renderSideDiscordTab();
     injectGlobalBubbleStyles();
 
     let root = document.getElementById("fmz-gb-root");
@@ -1984,16 +2125,17 @@
               const isCritical = leftSec <= 15 * 60;
               const isWarn = leftSec <= 30 * 60;
               const urgencyClass = isCritical ? "critical" : isWarn ? "warn" : "";
-              const troopsText = Array.isArray(a.troops) && a.troops.length
-                ? a.troops.map((t) => `${formatNumber(t.quantity)} ${esc(t.name)}`).join(", ")
-                : a.ants ? `${formatNumber(a.ants)} fourmis` : "Troupes non détaillées";
+              const tdcInfo = getAttackTdcSummary(a);
+              const tdcSub = tdcInfo.hasTdc
+                ? `TDC avant : <b>${formatNumber(tdcInfo.beforeTdc)}</b> · après : <b>${formatNumber(tdcInfo.afterTdc)}</b>`
+                : `TDC avant / après : <a class="fmz-gb-link" href="${esc(SHORTCUT_LINKS.membersUrl)}">Lire page Membres</a>`;
               return `
                 <div class="fmz-gb-row ${isWarn ? "soon" : ""}">
                   <div class="fmz-gb-row-top">
                     <b>${isCritical ? "🚨" : "🐎"} ${esc(a.attacker || "Inconnu")}</b>
                     <span class="fmz-gb-cd ${urgencyClass}" data-cd="${a.arrivalAt}">${formatDuration(leftSec)}</span>
                   </div>
-                  <div class="fmz-gb-sub">${troopsText}</div>
+                  <div class="fmz-gb-sub">${tdcSub}</div>
                 </div>
               `;
             })
@@ -2061,9 +2203,7 @@
         `
         : "";
 
-      const commerceShortcut = !IS_COMMERCE && openRequestsCount > 0
-        ? `<a class="fmz-gb-link" href="/commerce.php">🚚 Aller Commerce</a>`
-        : `<span>${esc(syncStatus.label)}</span>`;
+      const membersLink = `<a class="fmz-gb-link" href="${esc(SHORTCUT_LINKS.membersUrl)}">📋 Membres (TDC)</a>`;
 
       cardHtml = `
         <div id="fmz-gb-card">
@@ -2078,7 +2218,7 @@
 
           <div class="fmz-gb-status-bar">
             <span>${esc(syncStatus.label)}</span>
-            ${commerceShortcut}
+            ${membersLink}
           </div>
 
           ${accountHtml}
@@ -2125,6 +2265,9 @@
     root.innerHTML = `
       ${cardHtml}
       <div class="fmz-gb-dock">
+        <a id="fmz-gb-discord-fab" class="fmz-gb-fab" href="${esc(SHORTCUT_LINKS.discordUrl)}" target="_blank" rel="noopener noreferrer" title="Ouvrir Discord">
+          <span>💬 Discord</span>
+        </a>
         <a id="fmz-gb-site-fab" class="fmz-gb-fab" href="${esc(SHORTCUT_LINKS.siteUrl)}" target="_blank" rel="noopener noreferrer" title="Ouvrir le site applizzz">
           <span>🌐 Site</span>
         </a>
@@ -2246,6 +2389,9 @@
   }
 
   function runPageCycle() {
+    if (isMembersPageView()) {
+      scrapeAllianceMembersTdc();
+    }
     if (IS_RESSOURCES) {
       const hunts = reconcileHunts();
       renderRessourcesPanel(hunts);
@@ -2299,7 +2445,8 @@
       e.key === STORAGE_KEYS.convoyRequests ||
       e.key === STORAGE_KEYS.bubbleOpen ||
       e.key === STORAGE_KEYS.convoyBubbleOpen ||
-      e.key === STORAGE_KEYS.bubbleSections
+      e.key === STORAGE_KEYS.bubbleSections ||
+      e.key === STORAGE_KEYS.allianceTdc
     ) {
       runPageCycle();
     }
