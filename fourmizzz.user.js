@@ -1,10 +1,10 @@
- // ==UserScript==
+// ==UserScript==
 // @name         Le Dôme De La Paix - Fourmizzz S5 (Ressources, Armee & Commerce)
 // @namespace    https://s5.fourmizzz.fr/
-// @version      0.5.17-worker
+// @version      0.5.22-worker
 // @updateURL    https://raw.githubusercontent.com/LDDLP/applizze-script/main/fourmizzz.user.js
 // @downloadURL  https://raw.githubusercontent.com/LDDLP/applizze-script/main/fourmizzz.user.js
-// @description  Outils d'alliance centralisés : chasses & attaques entrantes (Ressources), détection d'attaques (Armee), et convois (Commerce) avec relai Worker.
+// @description  Outils d'alliance centralisés : chasses & attaques entrantes (Ressources), détection d'attaques (Armee & ennemie), convois (Commerce) et bulles flottantes globales avec relai Worker.
 // @match        *://*.fourmizzz.fr/*
 // @grant        GM_xmlhttpRequest
 // @grant        GM_getValue
@@ -18,19 +18,25 @@
   const PATH = window.location.pathname.toLowerCase();
   const IS_RESSOURCES = PATH.includes("ressources.php");
   const IS_ARMEE = PATH.includes("armee.php");
+  const IS_ENNEMIE = PATH.includes("ennemie.php");
+  const IS_ATTACK_PAGE = IS_ARMEE || IS_ENNEMIE;
   const IS_COMMERCE = PATH.includes("commerce.php");
-
-  if (!IS_RESSOURCES && !IS_ARMEE && !IS_COMMERCE) return;
 
   const STORAGE_KEYS = {
     hunts: "fmz_local_hunts_v1",
+    huntHistory: "fmz_local_hunt_history_v1",
+    huntBenchmarks: "fmz_local_hunt_benchmarks_v1",
     attacks: "fmz_local_attacks_v1",
     movements: "fmz_local_movements_v1",
     convoyRequests: "fmz_local_convoy_requests_v1",
     convoyLog: "fmz_local_convoy_log_v1",
+    pendingCommerceFill: "fmz_pending_commerce_fill_v1",
     devUser: "fmz_local_dev_user_v1",
     authToken: "fmz_local_auth_token_v1",
-    workerPass: "fmz_local_worker_pass_v1"
+    workerPass: "fmz_local_worker_pass_v1",
+    bubbleOpen: "fmz_global_bubble_open_v1",
+    convoyBubbleOpen: "fmz_convoy_bubble_open_v1",
+    bubbleSections: "fmz_global_bubble_sections_v1"
   };
 
   const DEFAULT_DEV_USER = "DEADKAT";
@@ -54,6 +60,7 @@
   let nextRetryAt = 0;
   const RETRY_DELAY_MS = 60 * 1000;
   let lastSyncUpdatedAt = 0;
+  let syncStatus = { state: "idle", label: "Prêt", at: 0 };
 
   const DEFAULT_PLAYERS = [
     { name: "Peps", x: 80, y: 52, va: 0 },
@@ -73,6 +80,10 @@
     { name: "DEADKAT", x: 35, y: 81, va: 0 },
     { name: "Lafoufe", x: 94, y: 67, va: 0 }
   ];
+
+  function setSyncState(state, label) {
+    syncStatus = { state, label, at: Date.now() };
+  }
 
   function getDevUser() {
     try {
@@ -106,6 +117,20 @@
       nextRetryAt = 0;
     }
     return clean;
+  }
+
+  function resetAccountSession(newPseudo = "") {
+    setStoredToken("");
+    setStoredPassword("");
+    Object.keys(lastSentSig).forEach((k) => delete lastSentSig[k]);
+    lastSyncUpdatedAt = 0;
+    nextRetryAt = 0;
+    if (newPseudo && String(newPseudo).trim()) {
+      try {
+        localStorage.setItem(STORAGE_KEYS.devUser, String(newPseudo).trim());
+      } catch (e) {}
+    }
+    setSyncState("idle", "Déconnecté");
   }
 
   function getStoredPassword() {
@@ -154,6 +179,53 @@
       else localStorage.removeItem(STORAGE_KEYS.authToken);
     } catch (e) {}
     return clean;
+  }
+
+  function isGlobalBubbleOpen() {
+    try {
+      return localStorage.getItem(STORAGE_KEYS.bubbleOpen) === "1";
+    } catch (e) {
+      return false;
+    }
+  }
+
+  function setGlobalBubbleOpen(open) {
+    try {
+      localStorage.setItem(STORAGE_KEYS.bubbleOpen, open ? "1" : "0");
+    } catch (e) {}
+  }
+
+  function isConvoyBubbleOpen() {
+    try {
+      return localStorage.getItem(STORAGE_KEYS.convoyBubbleOpen) === "1";
+    } catch (e) {
+      return false;
+    }
+  }
+
+  function setConvoyBubbleOpen(open) {
+    try {
+      localStorage.setItem(STORAGE_KEYS.convoyBubbleOpen, open ? "1" : "0");
+    } catch (e) {}
+  }
+
+  function getCollapsedSections() {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEYS.bubbleSections);
+      const parsed = JSON.parse(raw || "{}");
+      return parsed && typeof parsed === "object" ? parsed : {};
+    } catch (e) {
+      return {};
+    }
+  }
+
+  function toggleSectionCollapsed(secKey) {
+    const cur = getCollapsedSections();
+    cur[secKey] = !cur[secKey];
+    try {
+      localStorage.setItem(STORAGE_KEYS.bubbleSections, JSON.stringify(cur));
+    } catch (e) {}
+    return !!cur[secKey];
   }
 
   function normalizePseudo(raw) {
@@ -377,11 +449,13 @@
 
   async function syncWithWorker(payload, dedupKey = null) {
     if (!WORKER_CONFIG.enabled) {
+      setSyncState("local", "Local seul");
       return { ok: true, mode: "local-only" };
     }
 
     const baseUrl = String(WORKER_CONFIG.endpoint || "").replace(/\/+$/, "");
     if (!baseUrl) {
+      setSyncState("error", "URL manquante");
       return { ok: false, mode: "missing-endpoint", error: "URL Worker manquante" };
     }
 
@@ -398,12 +472,15 @@
     }
 
     if (Date.now() < nextRetryAt) {
+      setSyncState("backoff", "Pause synchro");
       return { ok: false, mode: "backoff", error: "Nouvel essai différé" };
     }
 
+    setSyncState("syncing", "Envoi…");
     let token = await ensureWorkerToken(baseUrl, false);
     if (!token) {
       nextRetryAt = Date.now() + RETRY_DELAY_MS;
+      setSyncState("error", "Auth requise");
       return { ok: false, mode: "auth-failed", error: "Impossible d'obtenir un token Worker" };
     }
 
@@ -420,11 +497,72 @@
 
     if (res.ok) {
       if (cacheKey && sig) lastSentSig[cacheKey] = sig;
+      setSyncState("ok", "Synchro OK");
     } else {
       nextRetryAt = Date.now() + RETRY_DELAY_MS;
+      setSyncState("error", "Erreur synchro");
     }
 
     return res;
+  }
+
+  function archiveFinishedHunts(activeList, now = Date.now()) {
+    const activeIds = new Set((activeList || []).map((h) => String(h.sig || h.id)));
+    const prevStored = readJsonArray(STORAGE_KEYS.hunts);
+    const history = readJsonArray(STORAGE_KEYS.huntHistory);
+    const existingIds = new Set(history.map((item) => String(item.sig || item.id)));
+    let added = false;
+
+    for (const h of prevStored) {
+      if (!h) continue;
+      const id = String(h.sig || h.id);
+      if (Number(h.arrivalAt || 0) <= now && !activeIds.has(id) && !existingIds.has(id)) {
+        history.unshift({
+          ...h,
+          finishedAt: Number(h.arrivalAt) || now
+        });
+        existingIds.add(id);
+        added = true;
+      }
+    }
+
+    if (added) {
+      writeJsonArray(STORAGE_KEYS.huntHistory, history.slice(0, 25));
+    }
+  }
+
+  function recordHuntBenchmark(huntItem, now = Date.now()) {
+    if (!huntItem || !huntItem.area || huntItem.area <= 0) return;
+    const totalDurationSec = Math.max(
+      1,
+      Math.round((Number(huntItem.arrivalAt || now) - Number(huntItem.firstSeenAt || huntItem.detectedAt || now)) / 1000)
+    );
+    const benchmarks = readJsonArray(STORAGE_KEYS.huntBenchmarks);
+    const areaKey = Number(huntItem.area);
+    const existingIdx = benchmarks.findIndex((b) => Number(b.area) === areaKey);
+
+    const entry = {
+      area: areaKey,
+      durationSec: totalDurationSec,
+      player: huntItem.player || getDevUser(),
+      updatedAt: now
+    };
+
+    if (existingIdx >= 0) {
+      const prev = benchmarks[existingIdx];
+      benchmarks[existingIdx] = {
+        ...prev,
+        durationSec: Math.max(Number(prev.durationSec || 0), totalDurationSec),
+        updatedAt: now
+      };
+    } else {
+      benchmarks.unshift(entry);
+    }
+
+    const sorted = benchmarks
+      .sort((a, b) => Number(b.updatedAt || 0) - Number(a.updatedAt || 0))
+      .slice(0, 12);
+    writeJsonArray(STORAGE_KEYS.huntBenchmarks, sorted);
   }
 
   function mergeRemoteHunts(remoteHunts) {
@@ -443,12 +581,14 @@
         area: Number(m.area) || 0,
         troops: Array.isArray(m.troops) ? m.troops : [],
         arrivalLabel: m.arrivalLabel || "",
+        firstSeenAt: Number(m.startAt) || now,
         detectedAt: Number(m.startAt) || now,
         arrivalAt: Number(m.arrivalAt),
         active: true
       }));
 
     const merged = mineLocal.concat(othersRemote);
+    archiveFinishedHunts(merged, now);
     writeJsonArray(STORAGE_KEYS.hunts, merged);
     return merged;
   }
@@ -503,12 +643,30 @@
   }
 
   async function pullFromWorker(force = false) {
-    if (!WORKER_CONFIG.enabled) return false;
+    if (!WORKER_CONFIG.enabled) {
+      setSyncState("local", "Local seul");
+      return false;
+    }
     const baseUrl = String(WORKER_CONFIG.endpoint || "").replace(/\/+$/, "");
-    if (!baseUrl || Date.now() < nextRetryAt) return false;
+    if (!baseUrl) {
+      setSyncState("error", "URL manquante");
+      return false;
+    }
+    if (!force && Date.now() < nextRetryAt) {
+      setSyncState("backoff", "Pause synchro");
+      return false;
+    }
+    if (force) {
+      nextRetryAt = 0;
+    }
 
+    setSyncState("syncing", "Synchro…");
     let token = await ensureWorkerToken(baseUrl, false);
-    if (!token) return false;
+    if (!token) {
+      nextRetryAt = Date.now() + RETRY_DELAY_MS;
+      setSyncState("error", "Auth requise");
+      return false;
+    }
 
     const sinceParam = !force && lastSyncUpdatedAt ? `?since=${encodeURIComponent(lastSyncUpdatedAt)}` : "";
     let res = await httpJsonRequest("GET", `${baseUrl}/api/sync${sinceParam}`, undefined, token);
@@ -523,9 +681,11 @@
 
     if (!res.ok) {
       nextRetryAt = Date.now() + RETRY_DELAY_MS;
+      setSyncState("error", "Erreur synchro");
       return false;
     }
 
+    setSyncState("ok", "Synchro OK");
     const data = res.data || {};
     if (data.unchanged) return false;
 
@@ -605,6 +765,7 @@
         area,
         troops,
         arrivalLabel,
+        firstSeenAt: now,
         detectedAt: now,
         arrivalAt,
         active: true
@@ -634,20 +795,25 @@
       const prev = bySig.get(item.sig);
       if (prev) {
         const diff = Math.abs(prev.arrivalAt - item.arrivalAt);
-        bySig.set(item.sig, {
+        const mergedItem = {
           ...prev,
           area: item.area ?? prev.area,
           troops: item.troops.length ? item.troops : prev.troops,
           arrivalLabel: item.arrivalLabel || prev.arrivalLabel,
+          firstSeenAt: Number(prev.firstSeenAt || prev.detectedAt || item.firstSeenAt || now),
           arrivalAt: diff < 30000 ? prev.arrivalAt : item.arrivalAt,
           active: true
-        });
+        };
+        bySig.set(item.sig, mergedItem);
+        recordHuntBenchmark(mergedItem, now);
       } else {
         bySig.set(item.sig, item);
+        recordHuntBenchmark(item, now);
       }
     }
 
     const nextHunts = Array.from(bySig.values());
+    archiveFinishedHunts(nextHunts, now);
     writeJsonArray(STORAGE_KEYS.hunts, nextHunts);
     const myHunts = nextHunts.filter((h) => normalizePseudo(h.player) === normPlayer);
     syncWithWorker({ kind: "hunts", player: playerName, hunts: myHunts });
@@ -661,20 +827,91 @@
 
     return readJsonArray(STORAGE_KEYS.attacks)
       .filter((a) => a && a.arrivalAt > now && normalizePseudo(a.target) === meNorm)
-      .sort((a, b) => a.arrivalAt - b.arrivalAt);
+      .sort((a, b) => Number(a.arrivalAt || 0) - Number(b.arrivalAt || 0));
+  }
+
+  function getAllActiveHunts(now = Date.now()) {
+    return readJsonArray(STORAGE_KEYS.hunts)
+      .filter((h) => h && Number(h.arrivalAt || 0) > now)
+      .sort((a, b) => Number(a.arrivalAt || 0) - Number(b.arrivalAt || 0));
+  }
+
+  let convoyRequests = readJsonArray(STORAGE_KEYS.convoyRequests);
+  convoyRequests.forEach((r) => {
+    if (!Array.isArray(r.deliveries)) r.deliveries = [];
+  });
+  let convoyLog = readJsonArray(STORAGE_KEYS.convoyLog);
+  let convoyFilter = "open";
+  const convoyDrafts = {};
+  let lastCommerceMessage = "";
+  let accountDrawerOpen = false;
+
+  function saveConvoyRequestsLocal() {
+    writeJsonArray(STORAGE_KEYS.convoyRequests, convoyRequests);
+  }
+
+  function saveConvoyLog() {
+    writeJsonArray(STORAGE_KEYS.convoyLog, convoyLog.slice(-50));
+  }
+
+  function getConvoySummaryForUser(userName, now = Date.now()) {
+    const meNorm = normalizePseudo(userName);
+    if (!meNorm) return { incoming: [], outgoing: [] };
+
+    const activeMovements = readJsonArray(STORAGE_KEYS.movements).filter(
+      (m) => m && m.type === "convoy" && Number(m.arrivalAt || 0) > now
+    );
+
+    const byId = new Map();
+    for (const m of activeMovements) {
+      const id = String(m.id || `${m.arrivalAt}_${m.wood}_${m.apples}`);
+      byId.set(id, {
+        id,
+        fromName: (m.from && m.from.name) || m.createdBy || "Joueur",
+        toName: (m.to && m.to.name) || "Destinataire",
+        wood: Number(m.wood) || 0,
+        apples: Number(m.apples) || 0,
+        arrivalAt: Number(m.arrivalAt)
+      });
+    }
+
+    for (const r of convoyRequests) {
+      if (!r || !Array.isArray(r.deliveries)) continue;
+      for (const d of r.deliveries) {
+        const arrAt = Number(d && d.arrivalAt || 0);
+        if (!arrAt || arrAt <= now) continue;
+        const id = d.movementId ? String(d.movementId) : `del_${r.id}_${arrAt}`;
+        if (!byId.has(id)) {
+          byId.set(id, {
+            id,
+            fromName: d.by || d.loggedBy || "Joueur",
+            toName: r.player || "Destinataire",
+            wood: Number(d.wood) || 0,
+            apples: Number(d.apples) || 0,
+            arrivalAt: arrAt
+          });
+        }
+      }
+    }
+
+    const all = Array.from(byId.values()).sort((a, b) => a.arrivalAt - b.arrivalAt);
+    return {
+      incoming: all.filter((c) => normalizePseudo(c.toName) === meNorm),
+      outgoing: all.filter((c) => normalizePseudo(c.fromName) === meNorm)
+    };
   }
 
   let armeeBubbleTimer = null;
   let lastArmeeSnapshotKey = "";
 
   function ensureArmeeIndicator() {
-    if (!IS_ARMEE) return null;
+    if (!IS_ATTACK_PAGE) return null;
     if (!document.getElementById("fmz-armee-style")) {
       const style = document.createElement("style");
       style.id = "fmz-armee-style";
       style.textContent = `
         #fmz-armee-badge-wrap{
-          position:fixed;right:12px;bottom:14px;z-index:9999;
+          position:fixed;right:12px;bottom:14px;z-index:9998;
           display:flex;align-items:center;gap:8px;
           font-family:Arial,sans-serif;pointer-events:none;
         }
@@ -715,7 +952,7 @@
   }
 
   function showArmeeImportedBubble(message = "Attaques importées") {
-    if (!IS_ARMEE) return;
+    if (!IS_ATTACK_PAGE) return;
     ensureArmeeIndicator();
     const bubble = document.getElementById("fmz-armee-bubble");
     if (!bubble) return;
@@ -889,6 +1126,7 @@
       .fmz-item-top{display:flex;justify-content:space-between;gap:8px;font-weight:bold;color:#fca5a5}
       .fmz-muted{color:#9ca3af;font-size:12px}
       .fmz-foot{margin-top:8px;padding-top:6px;border-top:1px solid #374151;font-size:12px;color:#fde68a}
+      .fmz-bench{margin-top:6px;padding:6px 8px;background:#111827;border:1px solid #374151;border-radius:6px;font-size:11px;color:#cbd5e1;line-height:1.4}
     `;
     document.head.appendChild(style);
   }
@@ -921,6 +1159,7 @@
         </div>
         <div id="fmz-panel-body"></div>
         <div id="fmz-panel-foot" class="fmz-foot"></div>
+        <div id="fmz-panel-bench" class="fmz-bench"></div>
       `;
 
       const saveBtn = panel.querySelector("#fmz-dev-save");
@@ -953,6 +1192,7 @@
     const inputEl = panel.querySelector("#fmz-dev-input");
     const bodyEl = panel.querySelector("#fmz-panel-body");
     const footEl = panel.querySelector("#fmz-panel-foot");
+    const benchEl = panel.querySelector("#fmz-panel-bench");
     const now = Date.now();
     const devUser = getDevUser();
 
@@ -993,26 +1233,19 @@
           .map((h) => `${formatNumber(h.area)} cm² dans ${formatDuration(Math.ceil((h.arrivalAt - now) / 1000))}`)
           .join(" · ")})`
       : `⚔️ Chasses suivies automatiquement : <b>0</b>`;
+
+    const benchmarks = readJsonArray(STORAGE_KEYS.huntBenchmarks).slice(0, 5);
+    const history = readJsonArray(STORAGE_KEYS.huntHistory).slice(0, 3);
+    const benchText = benchmarks.length
+      ? benchmarks.map((b) => `<b>${formatNumber(b.area)} cm²</b> ≈ ${formatDuration(b.durationSec)}`).join(" · ")
+      : "Aucun repère enregistré pour l'instant (se remplit automatiquement quand une chasse est détectée).";
+    const histText = history.length
+      ? `<div style="margin-top:4px;color:#86efac">✅ Dernières chasses bouclées : ${history
+          .map((h) => `${esc(h.player || devUser)} (${formatNumber(h.area)} cm²)`)
+          .join(" · ")}</div>`
+      : "";
+    benchEl.innerHTML = `⏱️ <b>Repères de durée de chasse :</b> ${benchText}${histText}`;
   }
-
-  let convoyRequests = readJsonArray(STORAGE_KEYS.convoyRequests);
-  convoyRequests.forEach((r) => {
-    if (!Array.isArray(r.deliveries)) r.deliveries = [];
-  });
-  let convoyLog = readJsonArray(STORAGE_KEYS.convoyLog);
-  let convoyTab = "requests";
-  let convoyFilter = "open";
-  const convoyDrafts = {};
-  let lastCommerceMessage = "";
-
-  function saveConvoyRequestsLocal() {
-    writeJsonArray(STORAGE_KEYS.convoyRequests, convoyRequests);
-  }
-
-  function saveConvoyLog() {
-    writeJsonArray(STORAGE_KEYS.convoyLog, convoyLog);
-  }
-
   function findPlayerByPseudo(name) {
     const n = normalizePseudo(name);
     return DEFAULT_PLAYERS.find((p) => normalizePseudo(p.name) === n) || null;
@@ -1068,11 +1301,26 @@
     return Number.isFinite(n) && n > 0 ? n : 0;
   }
 
+  function queuePendingCommerceFill(payload) {
+    if (!payload) return;
+    try {
+      localStorage.setItem(
+        STORAGE_KEYS.pendingCommerceFill,
+        JSON.stringify({
+          recipient: String(payload.recipient || ""),
+          apples: clampNonNegativeInt(payload.apples),
+          wood: clampNonNegativeInt(payload.wood),
+          expiresAt: Date.now() + 3 * 60 * 1000
+        })
+      );
+    } catch (e) {}
+  }
+
   function fillCommerceFormFields({ recipient, apples, wood }) {
-    if (!IS_COMMERCE) return;
+    if (!IS_COMMERCE) return { filledCount: 0, totalVisibleFields: 0 };
 
     const isVisibleField = (el) => {
-      if (!el || (el.closest && el.closest("#ddp-overlay"))) return false;
+      if (!el || (el.closest && el.closest("#fmz-gb-root"))) return false;
       const type = String(el.type || "").toLowerCase();
       if (["hidden", "submit", "button", "checkbox", "radio", "reset", "file", "image"].includes(type)) {
         return false;
@@ -1126,494 +1374,825 @@
     };
   }
 
-  function injectCommerceStyles() {
-    if (document.getElementById("ddp-commerce-style")) return;
+  function consumePendingCommerceFillIfNeeded() {
+    if (!IS_COMMERCE) return;
+    let raw = "";
+    try {
+      raw = localStorage.getItem(STORAGE_KEYS.pendingCommerceFill) || "";
+    } catch (e) {}
+    if (!raw) return;
+
+    let data = null;
+    try {
+      data = JSON.parse(raw);
+    } catch (e) {}
+
+    try {
+      localStorage.removeItem(STORAGE_KEYS.pendingCommerceFill);
+    } catch (e) {}
+
+    if (!data || Number(data.expiresAt || 0) < Date.now()) return;
+
+    const tryFill = () => {
+      const res = fillCommerceFormFields(data);
+      if (res && res.filledCount > 0) {
+        lastCommerceMessage = `✓ Champs pré-remplis pour ${data.recipient || "destinataire"} (🪵 ${formatNumber(data.wood)} · 🍎 ${formatNumber(data.apples)}).`;
+        renderGlobalBubble();
+      }
+    };
+
+    tryFill();
+    setTimeout(tryFill, 250);
+  }
+
+  function createConvoyRequest({ wood, apples, note }) {
+    const cleanWood = clampNonNegativeInt(wood);
+    const cleanApples = clampNonNegativeInt(apples);
+    const cleanNote = String(note || "").trim();
+    if (cleanWood <= 0 && cleanApples <= 0) {
+      return { ok: false, message: "⚠️ Indique du bois et/ou des pommes." };
+    }
+    if (!cleanNote) {
+      return { ok: false, message: "⚠️ Le motif est obligatoire." };
+    }
+    const devUser = getDevUser();
+    const newReq = {
+      id: Date.now() + "_" + Math.floor(Math.random() * 1e6),
+      player: devUser,
+      wood: cleanWood,
+      apples: cleanApples,
+      note: cleanNote,
+      status: "open",
+      deliveries: [],
+      createdAt: Date.now(),
+      createdBy: devUser
+    };
+    convoyRequests.push(newReq);
+    saveConvoyRequestsLocal();
+    syncWithWorker({ kind: "requests", action: "create", request: newReq }, false);
+    return { ok: true, message: "✓ Demande de convoi enregistrée." };
+  }
+
+  function deliverConvoyRequest({ requestId, rawWood, rawApples, redirectToCommerce = false }) {
+    const r = convoyRequests.find((item) => item.id === requestId);
+    if (!r) return { ok: false, message: "⚠️ Demande introuvable." };
+
+    const devUser = getDevUser();
+    if (isOwnRequest(r, devUser)) {
+      return { ok: false, message: "🔒 Vous ne pouvez pas livrer votre propre demande." };
+    }
+
+    const rem = reqRemaining(r);
+    const wVal = clampNonNegativeInt(rawWood);
+    const aVal = clampNonNegativeInt(rawApples);
+
+    if (wVal > rem.wood || aVal > rem.apples) {
+      return {
+        ok: false,
+        message: `⚠️ Max restant : 🪵 ${formatNumber(rem.wood)} · 🍎 ${formatNumber(rem.apples)}.`
+      };
+    }
+
+    const wood = Math.min(rem.wood, wVal);
+    const apples = Math.min(rem.apples, aVal);
+
+    if (wood <= 0 && apples <= 0) {
+      return { ok: false, message: "⚠️ Indique une quantité supérieure à 0." };
+    }
+
+    const sender = findPlayerByPseudo(devUser) || { name: devUser, x: 0, y: 0, va: 0 };
+    const dest = findPlayerByPseudo(r.player) || { name: r.player, x: 0, y: 0, va: 0 };
+    const dur = calcTravelSeconds(sender, dest);
+    const tNow = Date.now();
+    const arrivalAt = tNow + dur * 1000;
+    const mvs = readJsonArray(STORAGE_KEYS.movements);
+    const mvId = tNow + "_" + Math.floor(Math.random() * 1e6);
+    const mv = {
+      id: mvId,
+      type: "convoy",
+      from: sender,
+      to: dest,
+      duration: dur,
+      startAt: tNow,
+      arrivalAt,
+      wood,
+      apples,
+      requestId: r.id,
+      createdBy: devUser
+    };
+    mvs.push(mv);
+    writeJsonArray(STORAGE_KEYS.movements, mvs);
+    convoyLog.push({
+      from: sender.name,
+      to: dest.name,
+      wood,
+      apples,
+      requestId: r.id,
+      arrivalAt
+    });
+    saveConvoyLog();
+
+    const delivery = {
+      by: sender.name,
+      loggedBy: devUser,
+      wood,
+      apples,
+      at: tNow,
+      arrivalAt,
+      movementId: mvId
+    };
+    r.deliveries.push(delivery);
+    const leftAfter = reqRemaining(r);
+    const isPartial = leftAfter.wood > 0 || leftAfter.apples > 0;
+    if (!isPartial) {
+      r.status = "done";
+      r.doneAt = tNow;
+    }
+    delete convoyDrafts[r.id];
+    saveConvoyRequestsLocal();
+    syncWithWorker({ kind: "movements", action: "create", movement: mv }, false);
+    syncWithWorker({ kind: "requests", action: "deliver", id: r.id, delivery }, false);
+
+    if (IS_COMMERCE) {
+      fillCommerceFormFields({ recipient: dest.name, apples, wood });
+      return {
+        ok: true,
+        message: `✓ Convoi enregistré vers ${dest.name} · champs pré-remplis.`
+      };
+    }
+
+    if (redirectToCommerce) {
+      queuePendingCommerceFill({ recipient: dest.name, apples, wood });
+      window.location.href = "/commerce.php";
+      return { ok: true, redirected: true, message: "🚚 Redirection vers Commerce…" };
+    }
+
+    return {
+      ok: true,
+      message: `✓ Convoi enregistré vers ${dest.name}.`
+    };
+  }
+
+  function injectGlobalBubbleStyles() {
+    if (document.getElementById("fmz-global-bubble-style")) return;
     const style = document.createElement("style");
-    style.id = "ddp-commerce-style";
+    style.id = "fmz-global-bubble-style";
     style.textContent = `
-      #ddp-overlay{display:block;position:relative;clear:both;width:calc(100% - 16px);max-width:680px;margin:18px auto 34px;background:#1f2937;color:#e5e7eb;border:1px solid #4b5563;border-radius:12px;padding:12px;z-index:50;font:13px/1.45 Arial,sans-serif;box-shadow:0 8px 24px rgba(0,0,0,.5)}
-      #ddp-overlay.ddp-minimized{width:auto;display:inline-block}
-      #ddp-overlay *{box-sizing:border-box}
-      .ddp-head{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:8px;flex-wrap:wrap}
-      .ddp-head b{font-size:14px;color:#fff}
-      .ddp-btn-mini{background:#374151;color:#fff;border:1px solid #6b7280;border-radius:6px;padding:4px 8px;cursor:pointer;font-size:12px}
-      .ddp-tabs,.ddp-filters{display:grid;gap:6px;margin-bottom:10px}
-      .ddp-tabs{grid-template-columns:1fr 1fr}
-      .ddp-filters{grid-template-columns:1fr 1fr}
-      .ddp-tab,.ddp-filter,.ddp-btn{padding:7px 6px;border-radius:7px;border:1px solid #4b5563;background:#111827;color:#e5e7eb;cursor:pointer;font-weight:bold;font-size:12px;text-align:center}
-      .ddp-tab.active,.ddp-filter.active{background:#374151;border-color:#9ca3af;color:#fff}
-      .ddp-btn.primary{background:#166534;border-color:#15803d;width:100%;margin-top:8px}
-      .ddp-btn.max-btn{background:#1e3a8a;border-color:#3b82f6;color:#fff;flex:0 0 auto;min-width:72px}
-      .ddp-btn.danger{background:#7f1d1d;border-color:#991b1b}
-      .ddp-input,.ddp-select{width:100%;padding:7px;margin-top:4px;border-radius:6px;border:1px solid #4b5563;background:#111827;color:#fff;font-size:13px}
-      .ddp-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
-      .ddp-card{background:#111827;border:1px solid #374151;border-left:4px solid #3b82f6;border-radius:8px;padding:9px;margin-bottom:8px}
-      .ddp-card.done{border-left-color:#22c55e;opacity:.75}
-      .ddp-muted{color:#9ca3af;font-size:12px}
-      .ddp-label{display:block;color:#9ca3af;font-size:12px;margin-top:8px}
-      .ddp-tag{display:inline-block;white-space:nowrap;font-size:11px;padding:2px 7px;border-radius:10px;background:#374151;color:#fff}
-      .ddp-tag.done{background:#166534}
-      .ddp-tag.taken{background:#854d0e}
-      .ddp-tag.transit{background:#1d4ed8}
-      .ddp-actions{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
-      .ddp-actions button{flex:1;min-width:90px}
-      .ddp-msg{margin-top:8px;font-size:12px;color:#86efac}
-      .ddp-warn{color:#fca5a5}
+      #fmz-gb-root{
+        position:fixed;right:12px;bottom:14px;z-index:10000;
+        display:flex;flex-direction:column;align-items:flex-end;gap:8px;
+        font-family:Arial,sans-serif;font-size:12px;color:#f3f4f6;
+      }
+      #fmz-gb-root.has-armee-badge{bottom:56px}
+      #fmz-gb-root *{box-sizing:border-box}
+      .fmz-gb-dock{display:flex;align-items:center;gap:6px}
+      .fmz-gb-fab{
+        display:flex;align-items:center;gap:6px;
+        background:#1f2937;color:#f9fafb;border:1px solid #4b5563;
+        border-radius:999px;padding:7px 12px;cursor:pointer;
+        font-weight:bold;font-size:12px;box-shadow:0 6px 18px rgba(0,0,0,.5);
+        user-select:none;
+      }
+      .fmz-gb-fab.alert{
+        background:#7f1d1d;border-color:#ef4444;color:#fff;
+      }
+      .fmz-gb-fab.convoy.active{
+        background:#1e3a8a;border-color:#60a5fa;color:#fff;
+      }
+      .fmz-gb-pill{
+        background:#111827;border:1px solid #4b5563;border-radius:999px;
+        padding:1px 6px;font-size:11px;color:#93c5fd;
+      }
+      .fmz-gb-fab.alert .fmz-gb-pill{
+        background:#450a0a;border-color:#fca5a5;color:#fecaca;
+      }
+      #fmz-gb-card, .fmz-gb-card{
+        width:min(368px, calc(100vw - 24px));
+        max-height:calc(100vh - 110px);
+        overflow-y:auto;
+        background:#1f2937 !important;
+        color:#f3f4f6 !important;
+        opacity:1 !important;
+        border:1px solid #4b5563;
+        border-radius:12px;
+        padding:10px;
+        box-shadow:0 10px 28px rgba(0,0,0,.75);
+      }
+      .fmz-gb-head{
+        display:flex;justify-content:space-between;align-items:center;
+        gap:6px;padding-bottom:7px;margin-bottom:8px;border-bottom:1px solid #374151;
+      }
+      .fmz-gb-head b{font-size:13px;color:#fff}
+      .fmz-gb-head-actions{display:flex;gap:4px;align-items:center}
+      .fmz-gb-btn{
+        background:#374151 !important;color:#fff !important;border:1px solid #6b7280;
+        border-radius:6px;padding:3px 8px;cursor:pointer;font-size:11px;font-weight:bold;
+      }
+      .fmz-gb-btn.primary{
+        background:#166534 !important;border-color:#22c55e;color:#fff !important;
+      }
+      .fmz-gb-btn.accent{
+        background:#1e3a8a !important;border-color:#3b82f6;color:#fff !important;
+      }
+      .fmz-gb-status-bar{
+        display:flex;justify-content:space-between;align-items:center;gap:6px;
+        font-size:11px;color:#9ca3af;margin-bottom:8px;padding:0 2px;
+      }
+      .fmz-gb-link{color:#93c5fd;text-decoration:none;font-weight:bold}
+      .fmz-gb-account-box{
+        background:#111827;border:1px solid #4b5563;border-radius:8px;
+        padding:8px;margin-bottom:8px;
+      }
+      .fmz-gb-account-row{display:flex;gap:6px;margin-top:6px}
+      .fmz-gb-account-input{
+        flex:1;background:#1f2937;color:#fff;border:1px solid #6b7280;
+        border-radius:6px;padding:4px 7px;font-size:12px;
+      }
+      .fmz-gb-sec{
+        background:#111827;border:1px solid #374151;border-radius:8px;
+        padding:7px 8px;margin-bottom:7px;
+      }
+      .fmz-gb-sec:last-child{margin-bottom:0}
+      .fmz-gb-sec.danger{border-left:3px solid #ef4444}
+      .fmz-gb-sec.urgent{border-color:#ef4444;background:#231318}
+      .fmz-gb-sec.in{border-left:3px solid #22c55e}
+      .fmz-gb-sec.hunt{border-left:3px solid #f59e0b}
+      .fmz-gb-sec.out{border-left:3px solid #3b82f6}
+      .fmz-gb-sec-title{
+        display:flex;justify-content:space-between;align-items:center;
+        font-weight:bold;font-size:12px;color:#e5e7eb;
+        cursor:pointer;user-select:none;
+      }
+      .fmz-gb-sec-body{margin-top:5px}
+      .fmz-gb-sec.collapsed .fmz-gb-sec-body{display:none}
+      .fmz-gb-row{padding:5px 0;border-top:1px solid #1f2937;line-height:1.35}
+      .fmz-gb-row.soon{background:rgba(239,68,68,.12);padding:5px 6px;border-radius:5px}
+      .fmz-gb-row:first-of-type{border-top:none;padding-top:1px}
+      .fmz-gb-row-top{display:flex;justify-content:space-between;align-items:center;gap:6px}
+      .fmz-gb-cd{white-space:nowrap;font-weight:bold;font-size:11px;color:#93c5fd}
+      .fmz-gb-cd.critical{color:#fca5a5;background:#7f1d1d;padding:1px 5px;border-radius:4px}
+      .fmz-gb-cd.warn{color:#fde68a}
+      .fmz-gb-sub{color:#9ca3af;font-size:11px;margin-top:2px}
+      .fmz-gb-empty{color:#9ca3af;font-size:11px}
+      .fmz-gb-grid2{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:5px}
+      .fmz-gb-lbl{display:block;color:#9ca3af;font-size:11px;margin-top:5px}
+      .fmz-gb-inp{
+        width:100%;background:#1f2937;color:#fff;border:1px solid #4b5563;
+        border-radius:6px;padding:5px 7px;font-size:12px;margin-top:2px;
+      }
+      .fmz-gb-actions{display:flex;gap:6px;margin-top:6px}
+      .fmz-gb-actions button{flex:1}
+      .fmz-gb-msg{margin-top:6px;font-size:11px;color:#86efac}
+      .fmz-gb-msg.warn{color:#fca5a5}
     `;
     document.head.appendChild(style);
   }
 
-  function setCommerceBanner(box, text, isWarn = false) {
-    lastCommerceMessage = text;
-    const msgBox = box && box.querySelector("#ddp-cv-msg");
-    if (msgBox) {
-      msgBox.className = isWarn ? "ddp-msg ddp-warn" : "ddp-msg";
-      msgBox.textContent = text;
-    }
+  function renderSectionBlock(key, title, count, bodyHtml, extraClass = "", collapsed = false) {
+    const arrow = collapsed ? "▸" : "▾";
+    return `
+      <div class="fmz-gb-sec ${extraClass} ${collapsed ? "collapsed" : ""}" data-sec="${esc(key)}">
+        <div class="fmz-gb-sec-title" data-toggle-sec="${esc(key)}">
+          <span>${arrow} ${title}</span>
+          <span>${count}</span>
+        </div>
+        <div class="fmz-gb-sec-body">${bodyHtml}</div>
+      </div>
+    `;
   }
 
-  function renderCommerceOverlay() {
-    if (!IS_COMMERCE) return;
-    injectCommerceStyles();
-    let box = document.getElementById("ddp-overlay");
-    if (!box) {
-      box = document.createElement("div");
-      box.id = "ddp-overlay";
-      const anchor =
-        document.querySelector("#centre, .centre, main, #contenu, .contenu") ||
-        document.body.lastElementChild;
-      if (anchor && anchor.parentNode) {
-        anchor.parentNode.insertBefore(box, anchor.nextSibling);
-      } else {
-        document.body.appendChild(box);
-      }
-    }
-
-    const devUser = getDevUser();
-    if (convoyFilter === "done") convoyFilter = "open";
-    const isMin = box.classList.contains("ddp-minimized");
-    if (isMin) {
-      box.innerHTML = `<button class="ddp-btn-mini" id="ddp-restore" type="button">🚚 Convois (${esc(devUser)})</button>`;
-      box.querySelector("#ddp-restore").onclick = () => {
-        box.classList.remove("ddp-minimized");
-        renderCommerceOverlay();
-      };
-      return;
-    }
-
-    const now = Date.now();
+  function buildConvoyBubbleHtml(devUser, now, collapsedMap) {
     const activeRequests = convoyRequests.filter((r) => r.status !== "done");
     const openCount = activeRequests.length;
+    const partialRequests = activeRequests.filter((r) => isPartialRequest(r));
     const ongoingDirectConvoys = getOngoingDirectConvoys(now);
+    const ongoingTotal = partialRequests.length + ongoingDirectConvoys.length;
 
-    let bodyHtml = "";
-    if (convoyTab === "requests") {
-      let cardsHtml = "";
-
-      if (convoyFilter === "ongoing") {
-        const partialCards = activeRequests
-          .filter((r) => isPartialRequest(r))
+    const toTreatHtml = !activeRequests.length
+      ? `<div class="fmz-gb-empty">Aucune demande ouverte à traiter.</div>`
+      : activeRequests
+          .slice()
           .sort((a, b) => a.createdAt - b.createdAt)
           .map((r) => {
             const rem = reqRemaining(r);
             const del = reqDelivered(r);
-            const activeArr = getActiveDeliveryArrivalAt(r, now);
-            const leftSec = activeArr > 0 ? Math.max(0, Math.ceil((activeArr - now) / 1000)) : 0;
+            const ownReq = isOwnRequest(r, devUser);
+            const dr = convoyDrafts[r.id] || {};
+            const wVal = dr.wood !== undefined ? dr.wood : rem.wood || 0;
+            const aVal = dr.apples !== undefined ? dr.apples : rem.apples || 0;
+            const statusText = del.wood || del.apples
+              ? `Partielle · reste 🪵 ${formatNumber(rem.wood)} · 🍎 ${formatNumber(rem.apples)}`
+              : `Ouverte`;
 
-            const deliveriesSummary =
-              Array.isArray(r.deliveries) && r.deliveries.length
-                ? `<div class="ddp-muted" style="margin-top:4px">🚚 Envoyé : ${r.deliveries
-                    .map((d) => `${esc(d.by || d.loggedBy || "Joueur")} (🪵 ${formatNumber(d.wood)} · 🍎 ${formatNumber(d.apples)})`)
-                    .join(", ")}</div>`
-                : "";
-
-            const headerTransitBadge = activeArr > 0
-              ? `<span class="ddp-tag transit">🚚 En route (<span data-cd="${activeArr}">${formatDuration(leftSec)}</span>)</span>`
-              : "";
-
-            return `
-              <div class="ddp-card">
-                <div class="ddp-head">
-                  <b>${esc(r.player)}</b>
-                  <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap"><span class="ddp-tag taken">🚚 Partielle</span>${headerTransitBadge}</div>
+            const actionBlock = ownReq
+              ? `<div class="fmz-gb-sub" style="color:#fca5a5">Votre demande personnelle</div>`
+              : `
+                <div class="fmz-gb-grid2">
+                  ${
+                    rem.wood > 0
+                      ? `<div><label class="fmz-gb-lbl">🪵 Bois (max ${formatNumber(rem.wood)})</label><input class="fmz-gb-inp" data-cv-df="wood" data-cv-did="${esc(r.id)}" data-cv-max="${rem.wood}" type="number" min="0" max="${rem.wood}" value="${esc(wVal)}"></div>`
+                      : ""
+                  }
+                  ${
+                    rem.apples > 0
+                      ? `<div><label class="fmz-gb-lbl">🍎 Pommes (max ${formatNumber(rem.apples)})</label><input class="fmz-gb-inp" data-cv-df="apples" data-cv-did="${esc(r.id)}" data-cv-max="${rem.apples}" type="number" min="0" max="${rem.apples}" value="${esc(aVal)}"></div>`
+                      : ""
+                  }
                 </div>
-                <div>🪵 ${formatNumber(r.wood)} · 🍎 ${formatNumber(r.apples)} <span class="ddp-muted">(reste 🪵 ${formatNumber(rem.wood)} · 🍎 ${formatNumber(rem.apples)})</span></div>
-                ${deliveriesSummary}
-                ${r.note ? `<div class="ddp-muted" style="margin-top:4px">💬 ${esc(r.note)}</div>` : ""}
-              </div>
-            `;
-          })
-          .join("");
+                <div class="fmz-gb-actions">
+                  <button class="fmz-gb-btn accent" data-cv-act="max" data-cv-id="${esc(r.id)}" type="button">Max</button>
+                  <button class="fmz-gb-btn primary" data-cv-act="send" data-cv-id="${esc(r.id)}" type="button">🚚 Lancer convoi</button>
+                </div>
+              `;
 
-        const convoyCards = ongoingDirectConvoys
-          .sort((a, b) => Number(a.arrivalAt || 0) - Number(b.arrivalAt || 0))
-          .map((m) => {
-            const arrAt = Number(m.arrivalAt || 0);
-            const leftSec = Math.max(0, Math.ceil((arrAt - now) / 1000));
-            const fromName = (m.from && m.from.name) || m.createdBy || "Joueur";
-            const toName = (m.to && m.to.name) || "Destinataire";
             return `
-              <div class="ddp-card">
-                <div class="ddp-head"><b>${esc(fromName)} → ${esc(toName)}</b><span class="ddp-tag transit">🚚 En route (<span data-cd="${arrAt}">${formatDuration(leftSec)}</span>)</span></div>
-                <div>🪵 ${formatNumber(m.wood)} · 🍎 ${formatNumber(m.apples)}</div>
+              <div class="fmz-gb-row" data-cv-card="${esc(r.id)}">
+                <div class="fmz-gb-row-top">
+                  <span><b>${esc(r.player)}</b> · 🪵 ${formatNumber(r.wood)} · 🍎 ${formatNumber(r.apples)}</span>
+                  <span class="fmz-gb-cd">${esc(statusText)}</span>
+                </div>
+                ${r.note ? `<div class="fmz-gb-sub">${esc(r.note)}</div>` : ""}
+                ${actionBlock}
               </div>
             `;
           })
           .join("");
 
-        cardsHtml = partialCards + convoyCards || `<div class="ddp-muted">Aucun convoi partiel ou en cours de livraison.</div>`;
-      } else {
-        const filtered = activeRequests
-          .slice()
-          .sort((a, b) => a.createdAt - b.createdAt);
-
-        cardsHtml = !filtered.length
-          ? `<div class="ddp-muted">Aucune demande dans cette vue.</div>`
-          : filtered
-              .map((r) => {
-                const rem = reqRemaining(r);
-                const del = reqDelivered(r);
-                const ownReq = isOwnRequest(r, devUser);
-                const tag = del.wood || del.apples
-                  ? `<span class="ddp-tag taken">🚚 Partielle</span>`
-                  : `<span class="ddp-tag">🟦 Ouverte</span>`;
-
-                const dr = convoyDrafts[r.id] || {};
-                const wVal = dr.wood !== undefined ? dr.wood : rem.wood || 0;
-                const aVal = dr.apples !== undefined ? dr.apples : rem.apples || 0;
-
-                const deliveriesSummary =
-                  Array.isArray(r.deliveries) && r.deliveries.length
-                    ? `<div class="ddp-muted" style="margin-top:4px">🚚 Envoyé : ${r.deliveries
-                        .map((d) => `${esc(d.by || d.loggedBy || "Joueur")} (🪵 ${formatNumber(d.wood)} · 🍎 ${formatNumber(d.apples)})`)
-                        .join(", ")}</div>`
-                    : "";
-
-                const sendForm = ownReq
-                  ? `<div class="ddp-muted" style="margin-top:8px;color:#fca5a5">🔒 Vous ne pouvez pas livrer votre propre demande.</div>`
-                  : `
-                    <div class="ddp-grid" style="margin-top:8px">
-                      ${
-                        rem.wood > 0
-                          ? `<div><label class="ddp-label">🪵 Bois restant : ${formatNumber(rem.wood)}</label><input class="ddp-input" data-df="wood" data-did="${esc(r.id)}" data-max="${rem.wood}" type="number" min="0" max="${rem.wood}" value="${esc(wVal)}"></div>`
-                          : ""
-                      }
-                      ${
-                        rem.apples > 0
-                          ? `<div><label class="ddp-label">🍎 Pommes restantes : ${formatNumber(rem.apples)}</label><input class="ddp-input" data-df="apples" data-did="${esc(r.id)}" data-max="${rem.apples}" type="number" min="0" max="${rem.apples}" value="${esc(aVal)}"></div>`
-                          : ""
-                      }
-                    </div>
-                    <div class="ddp-actions">
-                      <button class="ddp-btn max-btn" data-act="max" data-id="${esc(r.id)}" type="button">Max</button>
-                      <button class="ddp-btn primary" style="margin-top:0" data-act="send" data-id="${esc(r.id)}" type="button">🚚 Lancer convoi</button>
-                    </div>
-                  `;
-
-                return `
-                  <div class="ddp-card">
-                    <div class="ddp-head"><b>${esc(r.player)}</b>${tag}</div>
-                    <div>🪵 ${formatNumber(r.wood)} · 🍎 ${formatNumber(r.apples)}${
-                      del.wood || del.apples
-                        ? ` <span class="ddp-muted">(reste 🪵 ${formatNumber(rem.wood)} · 🍎 ${formatNumber(rem.apples)})</span>`
-                        : ""
-                    }</div>
-                    ${deliveriesSummary}
-                    ${r.note ? `<div class="ddp-muted" style="margin-top:4px">💬 ${esc(r.note)}</div>` : ""}
-                    ${sendForm}
-                  </div>
-                `;
-              })
-              .join("");
-      }
-
-      bodyHtml = `
-        <div class="ddp-filters">
-          <button class="ddp-filter ${convoyFilter === "open" ? "active" : ""}" data-cf="open" type="button">À traiter (${openCount})</button>
-          <button class="ddp-filter ${convoyFilter === "ongoing" ? "active" : ""}" data-cf="ongoing" type="button">🚚 En cours</button>
-        </div>
-        <div id="ddp-req-list">${cardsHtml}</div>
-        <div class="ddp-card" style="margin-top:10px;border-left-color:#22c55e">
-          <b>📬 Nouvelle demande de convoi (${esc(devUser)})</b>
-          <div class="ddp-grid">
-            <div><label class="ddp-label">🪵 Bois</label><input class="ddp-input" id="ddp-new-wood" type="number" min="0" placeholder="0"></div>
-            <div><label class="ddp-label">🍎 Pommes</label><input class="ddp-input" id="ddp-new-apples" type="number" min="0" placeholder="0"></div>
+    const partialRows = partialRequests
+      .sort((a, b) => a.createdAt - b.createdAt)
+      .map((r) => {
+        const activeArr = getActiveDeliveryArrivalAt(r, now);
+        const leftSec = activeArr > 0 ? Math.max(0, Math.ceil((activeArr - now) / 1000)) : 0;
+        const cdHtml = activeArr > 0
+          ? `<span class="fmz-gb-cd" data-cd="${activeArr}">${formatDuration(leftSec)}</span>`
+          : `<span class="fmz-gb-cd">Partielle</span>`;
+        return `
+          <div class="fmz-gb-row">
+            <div class="fmz-gb-row-top">
+              <span><b>${esc(r.player)}</b> · 🪵 ${formatNumber(r.wood)} · 🍎 ${formatNumber(r.apples)}</span>
+              ${cdHtml}
+            </div>
           </div>
-          <label class="ddp-label">Motif</label>
-          <input class="ddp-input" id="ddp-new-note" type="text" maxlength="200" placeholder="Ex : construction / évolution">
-          <button class="ddp-btn primary" id="ddp-add-req" type="button">📨 Envoyer la demande</button>
-          <div class="ddp-msg" id="ddp-cv-msg">${esc(lastCommerceMessage)}</div>
-        </div>
-      `;
-    } else {
-      const destOptions = DEFAULT_PLAYERS.filter((p) => normalizePseudo(p.name) !== normalizePseudo(devUser))
-        .map((p) => `<option value="${esc(p.name)}">${esc(p.name)}</option>`)
-        .join("");
-      bodyHtml = `
-        <div class="ddp-card" style="border-left-color:#3b82f6">
-          <b>🚚 Déclarer un convoi direct</b>
-          <div class="ddp-muted" style="margin-top:4px">Départ : <b>${esc(devUser)}</b></div>
-          <label class="ddp-label">Joueur d'arrivée</label>
-          <select class="ddp-select" id="ddp-cv-dest">${destOptions}</select>
-          <div class="ddp-grid">
-            <div><label class="ddp-label">🪵 Bois</label><input class="ddp-input" id="ddp-cv-wood" type="number" min="0" placeholder="0"></div>
-            <div><label class="ddp-label">🍎 Pommes</label><input class="ddp-input" id="ddp-cv-apples" type="number" min="0" placeholder="0"></div>
-          </div>
-          <button class="ddp-btn primary" id="ddp-send-direct" type="button">🚀 Lancer le convoi</button>
-          <div class="ddp-msg" id="ddp-cv-msg">${esc(lastCommerceMessage)}</div>
-        </div>
-      `;
-    }
+        `;
+      });
 
-    box.innerHTML = `
-      <div class="ddp-head">
-        <b>🚚 Convois · ${esc(devUser)}</b>
-        <div style="display:flex;gap:6px;align-items:center">
-          <input id="ddp-cv-user" class="ddp-input" style="width:110px;margin-top:0;padding:3px 6px;font-size:11px" value="${esc(devUser)}">
-          <button class="ddp-btn-mini" id="ddp-cv-user-ok" type="button">OK</button>
-          <button class="ddp-btn-mini" id="ddp-min" type="button">_</button>
-        </div>
+    const convoyRows = ongoingDirectConvoys
+      .sort((a, b) => Number(a.arrivalAt || 0) - Number(b.arrivalAt || 0))
+      .map((m) => {
+        const arrAt = Number(m.arrivalAt || 0);
+        const leftSec = Math.max(0, Math.ceil((arrAt - now) / 1000));
+        const fromName = (m.from && m.from.name) || m.createdBy || "Joueur";
+        const toName = (m.to && m.to.name) || "Destinataire";
+        return `
+          <div class="fmz-gb-row">
+            <div class="fmz-gb-row-top">
+              <span><b>${esc(fromName)} → ${esc(toName)}</b> · 🪵 ${formatNumber(m.wood)} · 🍎 ${formatNumber(m.apples)}</span>
+              <span class="fmz-gb-cd" data-cd="${arrAt}">${formatDuration(leftSec)}</span>
+            </div>
+          </div>
+        `;
+      });
+
+    const ongoingHtml = partialRows.concat(convoyRows).join("") || `<div class="fmz-gb-empty">Aucun convoi en cours.</div>`;
+
+    const newReqBodyHtml = `
+      <div class="fmz-gb-grid2">
+        <div><label class="fmz-gb-lbl">🪵 Bois</label><input class="fmz-gb-inp" id="fmz-cv-new-wood" type="number" min="0" placeholder="0"></div>
+        <div><label class="fmz-gb-lbl">🍎 Pommes</label><input class="fmz-gb-inp" id="fmz-cv-new-apples" type="number" min="0" placeholder="0"></div>
       </div>
-      <div class="ddp-tabs">
-        <button class="ddp-tab ${convoyTab === "requests" ? "active" : ""}" data-ct="requests" type="button">📋 Demandes (${openCount})</button>
-        <button class="ddp-tab ${convoyTab === "send" ? "active" : ""}" data-ct="send" type="button">🚚 Déclarer</button>
+      <label class="fmz-gb-lbl">Motif</label>
+      <input class="fmz-gb-inp" id="fmz-cv-new-note" type="text" maxlength="200" placeholder="Ex : construction / évolution">
+      <div class="fmz-gb-actions">
+        <button class="fmz-gb-btn primary" id="fmz-cv-add-req" type="button">📨 Envoyer la demande</button>
       </div>
-      ${bodyHtml}
+      <div class="fmz-gb-msg ${lastCommerceMessage.startsWith("⚠️") || lastCommerceMessage.startsWith("🔒") ? "warn" : ""}" id="fmz-cv-msg">${esc(lastCommerceMessage)}</div>
     `;
 
-    box.querySelector("#ddp-min").onclick = () => {
-      box.classList.add("ddp-minimized");
-      renderCommerceOverlay();
-    };
+    const logs = readJsonArray(STORAGE_KEYS.convoyLog).slice().reverse().slice(0, 10);
+    const historyHtml = !logs.length
+      ? `<div class="fmz-gb-empty">Aucun convoi dans l'historique.</div>`
+      : logs
+          .map((item) => {
+            const inTransit = Number(item.arrivalAt || 0) > now;
+            return `
+              <div class="fmz-gb-row">
+                <div class="fmz-gb-row-top">
+                  <span><b>${esc(item.from || "Joueur")} → ${esc(item.to || "Destinataire")}</b> · 🪵 ${formatNumber(item.wood)} · 🍎 ${formatNumber(item.apples)}</span>
+                  <span class="fmz-gb-cd">${inTransit ? "En route" : "Livré"}</span>
+                </div>
+              </div>
+            `;
+          })
+          .join("");
 
-    const userInput = box.querySelector("#ddp-cv-user");
-    const applyUser = () => {
-      setDevUser(userInput.value);
-      renderCommerceOverlay();
-      pullFromWorker(true).then((changed) => {
-        if (changed) renderCommerceOverlay();
-      });
-    };
-    box.querySelector("#ddp-cv-user-ok").onclick = applyUser;
-    userInput.addEventListener("keydown", (e) => {
-      if (e.key === "Enter") {
-        e.preventDefault();
-        applyUser();
-      }
-    });
+    return `
+      <div id="fmz-gb-card">
+        <div class="fmz-gb-head">
+          <b>🚚 Convois · ${esc(devUser)}</b>
+          <div class="fmz-gb-head-actions">
+            <button id="fmz-gb-refresh" class="fmz-gb-btn" type="button" title="Rafraîchir maintenant">🔄</button>
+            <button id="fmz-gb-cv-close" class="fmz-gb-btn" type="button" title="Réduire">_</button>
+          </div>
+        </div>
 
-    box.querySelectorAll("[data-ct]").forEach((btn) => {
-      btn.onclick = () => {
-        convoyTab = btn.dataset.ct;
-        renderCommerceOverlay();
-      };
-    });
+        <div class="fmz-gb-status-bar">
+          <span>${esc(syncStatus.label)}</span>
+          <a class="fmz-gb-link" href="/commerce.php">Page Commerce</a>
+        </div>
 
-    box.querySelectorAll("[data-cf]").forEach((btn) => {
-      btn.onclick = () => {
-        convoyFilter = btn.dataset.cf;
-        renderCommerceOverlay();
-      };
-    });
+        ${renderSectionBlock(
+          "cv_open",
+          "📋 Demandes à traiter",
+          openCount,
+          toTreatHtml,
+          "out",
+          !!collapsedMap.cv_open
+        )}
 
-    box.querySelectorAll("[data-df]").forEach((inp) => {
+        ${renderSectionBlock(
+          "cv_ongoing",
+          "🚚 Convois en cours",
+          ongoingTotal,
+          ongoingHtml,
+          "in",
+          !!collapsedMap.cv_ongoing
+        )}
+
+        ${renderSectionBlock(
+          "cv_new",
+          "📬 Nouvelle demande",
+          "",
+          newReqBodyHtml,
+          "hunt",
+          !!collapsedMap.cv_new
+        )}
+
+        ${renderSectionBlock(
+          "cv_hist",
+          "📜 Historique",
+          logs.length,
+          historyHtml,
+          "",
+          collapsedMap.cv_hist !== undefined ? !!collapsedMap.cv_hist : true
+        )}
+      </div>
+    `;
+  }
+
+  function bindConvoyBubbleEvents(root) {
+    root.querySelectorAll("[data-cv-df]").forEach((inp) => {
       inp.addEventListener("input", () => {
-        const id = inp.dataset.did;
-        const maxVal = clampNonNegativeInt(inp.dataset.max);
+        const id = inp.dataset.cvDid;
+        const maxVal = clampNonNegativeInt(inp.dataset.cvMax);
         let val = clampNonNegativeInt(inp.value);
         if (val > maxVal) {
           val = maxVal;
           inp.value = String(maxVal);
-          setCommerceBanner(box, `⚠️ Maximum autorisé pour cette demande : ${formatNumber(maxVal)}.`, true);
+          lastCommerceMessage = `⚠️ Maximum : ${formatNumber(maxVal)}.`;
+          const msgEl = root.querySelector("#fmz-cv-msg");
+          if (msgEl) {
+            msgEl.className = "fmz-gb-msg warn";
+            msgEl.textContent = lastCommerceMessage;
+          }
         }
         convoyDrafts[id] = convoyDrafts[id] || {};
-        convoyDrafts[id][inp.dataset.df] = val;
+        convoyDrafts[id][inp.dataset.cvDf] = val;
       });
     });
 
-    const addReqBtn = box.querySelector("#ddp-add-req");
+    const addReqBtn = root.querySelector("#fmz-cv-add-req");
     if (addReqBtn) {
       addReqBtn.onclick = () => {
-        const wood = clampNonNegativeInt(box.querySelector("#ddp-new-wood").value);
-        const apples = clampNonNegativeInt(box.querySelector("#ddp-new-apples").value);
-        const note = String(box.querySelector("#ddp-new-note").value || "").trim();
-        if (wood <= 0 && apples <= 0) {
-          setCommerceBanner(box, "⚠️ Indique du bois et/ou des pommes.", true);
-          return;
-        }
-        if (!note) {
-          setCommerceBanner(box, "⚠️ Le motif est obligatoire.", true);
-          return;
-        }
-        const newReq = {
-          id: Date.now() + "_" + Math.floor(Math.random() * 1e6),
-          player: getDevUser(),
-          wood,
-          apples,
-          note,
-          status: "open",
-          deliveries: [],
-          createdAt: Date.now(),
-          createdBy: getDevUser()
-        };
-        convoyRequests.push(newReq);
-        saveConvoyRequestsLocal();
-        syncWithWorker({ kind: "requests", action: "create", request: newReq }, false);
-        setCommerceBanner(box, "✓ Demande de convoi enregistrée.", false);
-        renderCommerceOverlay();
+        const res = createConvoyRequest({
+          wood: root.querySelector("#fmz-cv-new-wood")?.value,
+          apples: root.querySelector("#fmz-cv-new-apples")?.value,
+          note: root.querySelector("#fmz-cv-new-note")?.value
+        });
+        lastCommerceMessage = res.message;
+        renderGlobalBubble();
       };
     }
 
-    const sendDirectBtn = box.querySelector("#ddp-send-direct");
-    if (sendDirectBtn) {
-      sendDirectBtn.onclick = () => {
-        const sender = findPlayerByPseudo(getDevUser()) || { name: getDevUser(), x: 0, y: 0, va: 0 };
-        const destName = box.querySelector("#ddp-cv-dest").value;
-        const dest = findPlayerByPseudo(destName) || { name: destName, x: 0, y: 0, va: 0 };
-        const wood = clampNonNegativeInt(box.querySelector("#ddp-cv-wood").value);
-        const apples = clampNonNegativeInt(box.querySelector("#ddp-cv-apples").value);
-        if (wood <= 0 && apples <= 0) {
-          setCommerceBanner(box, "⚠️ Indique du bois et/ou des pommes.", true);
-          return;
-        }
-        const dur = calcTravelSeconds(sender, dest);
-        const tNow = Date.now();
-        const mv = {
-          id: tNow + "_" + Math.floor(Math.random() * 1e6),
-          type: "convoy",
-          from: sender,
-          to: dest,
-          duration: dur,
-          startAt: tNow,
-          arrivalAt: tNow + dur * 1000,
-          wood,
-          apples,
-          createdBy: getDevUser()
-        };
-        const mvs = readJsonArray(STORAGE_KEYS.movements);
-        mvs.push(mv);
-        writeJsonArray(STORAGE_KEYS.movements, mvs);
-        syncWithWorker({ kind: "movements", action: "create", movement: mv }, false);
-        convoyLog.push({ from: sender.name, to: dest.name, wood, apples, arrivalAt: tNow + dur * 1000 });
-        saveConvoyLog();
-        fillCommerceFormFields({ recipient: dest.name, apples, wood });
-        setCommerceBanner(box, `✓ Convoi enregistré (${formatDuration(dur)}) et champs pré-remplis pour ${dest.name}.`, false);
-        renderCommerceOverlay();
-      };
-    }
-
-    box.querySelectorAll("button[data-act]").forEach((btn) => {
+    root.querySelectorAll("button[data-cv-act]").forEach((btn) => {
       btn.onclick = () => {
-        if (convoyFilter === "ongoing") return;
-        const r = convoyRequests.find((item) => item.id === btn.dataset.id);
+        const r = convoyRequests.find((item) => item.id === btn.dataset.cvId);
         if (!r) return;
-        const act = btn.dataset.act;
-        if (isOwnRequest(r, getDevUser())) {
-          setCommerceBanner(box, "🔒 Vous ne pouvez pas livrer votre propre demande.", true);
-          return;
-        }
+        const act = btn.dataset.cvAct;
         if (act === "max") {
           const rem = reqRemaining(r);
-          convoyDrafts[r.id] = {
-            wood: rem.wood,
-            apples: rem.apples
-          };
-          setCommerceBanner(box, `✓ Quantités réglées au maximum restant pour ${r.player}.`, false);
-          renderCommerceOverlay();
+          convoyDrafts[r.id] = { wood: rem.wood, apples: rem.apples };
+          lastCommerceMessage = `✓ Max sélectionné pour ${r.player}.`;
+          renderGlobalBubble();
         } else if (act === "send") {
-          const card = btn.closest(".ddp-card");
-          const rem = reqRemaining(r);
-          const wInp = card.querySelector('[data-df="wood"]');
-          const aInp = card.querySelector('[data-df="apples"]');
-          const rawWood = wInp ? clampNonNegativeInt(wInp.value) : 0;
-          const rawApples = aInp ? clampNonNegativeInt(aInp.value) : 0;
-
-          if (rawWood > rem.wood || rawApples > rem.apples) {
-            setCommerceBanner(
-              box,
-              `⚠️ Impossible d'envoyer plus que le reste demandé (max 🪵 ${formatNumber(rem.wood)} · 🍎 ${formatNumber(rem.apples)}).`,
-              true
-            );
-            return;
-          }
-
-          const wood = Math.min(rem.wood, rawWood);
-          const apples = Math.min(rem.apples, rawApples);
-
-          if (wood <= 0 && apples <= 0) {
-            setCommerceBanner(box, "⚠️ Indique une quantité supérieure à 0.", true);
-            return;
-          }
-
-          const sender = findPlayerByPseudo(getDevUser()) || { name: getDevUser(), x: 0, y: 0, va: 0 };
-          const dest = findPlayerByPseudo(r.player) || { name: r.player, x: 0, y: 0, va: 0 };
-          const dur = calcTravelSeconds(sender, dest);
-          const tNow = Date.now();
-          const arrivalAt = tNow + dur * 1000;
-          const mvs = readJsonArray(STORAGE_KEYS.movements);
-          const mvId = tNow + "_" + Math.floor(Math.random() * 1e6);
-          const mv = {
-            id: mvId,
-            type: "convoy",
-            from: sender,
-            to: dest,
-            duration: dur,
-            startAt: tNow,
-            arrivalAt,
-            wood,
-            apples,
+          const card = btn.closest("[data-cv-card]");
+          const wInp = card?.querySelector('[data-cv-df="wood"]');
+          const aInp = card?.querySelector('[data-cv-df="apples"]');
+          const res = deliverConvoyRequest({
             requestId: r.id,
-            createdBy: getDevUser()
-          };
-          mvs.push(mv);
-          writeJsonArray(STORAGE_KEYS.movements, mvs);
-          convoyLog.push({
-            from: sender.name,
-            to: dest.name,
-            wood,
-            apples,
-            requestId: r.id,
-            arrivalAt
+            rawWood: wInp ? wInp.value : 0,
+            rawApples: aInp ? aInp.value : 0,
+            redirectToCommerce: true
           });
-          saveConvoyLog();
-
-          const delivery = {
-            by: sender.name,
-            loggedBy: getDevUser(),
-            wood,
-            apples,
-            at: tNow,
-            arrivalAt,
-            movementId: mvId
-          };
-          r.deliveries.push(delivery);
-          const leftAfter = reqRemaining(r);
-          const isPartial = leftAfter.wood > 0 || leftAfter.apples > 0;
-          if (!isPartial) {
-            r.status = "done";
-            r.doneAt = tNow;
-          }
-          delete convoyDrafts[r.id];
-          saveConvoyRequestsLocal();
-          syncWithWorker({ kind: "movements", action: "create", movement: mv }, false);
-          syncWithWorker({ kind: "requests", action: "deliver", id: r.id, delivery }, false);
-          fillCommerceFormFields({ recipient: dest.name, apples, wood });
-
-          setCommerceBanner(
-            box,
-            isPartial
-              ? `✓ Convoi partiel enregistré (🪵 ${formatNumber(wood)} · 🍎 ${formatNumber(apples)}) vers ${dest.name}. Visible dans En cours.`
-              : `✓ Convoi complet enregistré vers ${dest.name}.`,
-            false
-          );
-          renderCommerceOverlay();
+          lastCommerceMessage = res.message;
+          if (!res.redirected) renderGlobalBubble();
         }
       };
     });
   }
 
+  function renderGlobalBubble() {
+    if (!document.body) return;
+    injectGlobalBubbleStyles();
+
+    let root = document.getElementById("fmz-gb-root");
+    if (!root) {
+      root = document.createElement("div");
+      root.id = "fmz-gb-root";
+      document.body.appendChild(root);
+    }
+    root.classList.toggle("has-armee-badge", IS_ATTACK_PAGE);
+
+    const now = Date.now();
+    const devUser = getDevUser();
+    const incomingAttacks = getIncomingAttacksForCurrentUser();
+    const convoys = getConvoySummaryForUser(devUser, now);
+    const allHunts = getAllActiveHunts(now);
+    const openRequestsCount = convoyRequests.filter((r) => r.status !== "done").length;
+    const isDomeOpen = isGlobalBubbleOpen();
+    const isConvoyOpen = isConvoyBubbleOpen();
+    const collapsedMap = getCollapsedSections();
+
+    const hasImminentAttack = incomingAttacks.some((a) => (Number(a.arrivalAt || 0) - now) <= 30 * 60 * 1000);
+    const totalEvents =
+      incomingAttacks.length +
+      convoys.incoming.length +
+      allHunts.length +
+      convoys.outgoing.length;
+
+    const domeBadge = incomingAttacks.length > 0
+      ? `🛡️ ${incomingAttacks.length}`
+      : `🌐 ${totalEvents}`;
+
+    let cardHtml = "";
+
+    if (isConvoyOpen) {
+      cardHtml = buildConvoyBubbleHtml(devUser, now, collapsedMap);
+    } else if (isDomeOpen) {
+      const attacksHtml = !incomingAttacks.length
+        ? `<div class="fmz-gb-empty">Aucune attaque en cours sur moi.</div>`
+        : incomingAttacks
+            .map((a) => {
+              const leftSec = Math.max(0, Math.ceil((Number(a.arrivalAt || 0) - now) / 1000));
+              const isCritical = leftSec <= 15 * 60;
+              const isWarn = leftSec <= 30 * 60;
+              const urgencyClass = isCritical ? "critical" : isWarn ? "warn" : "";
+              const troopsText = Array.isArray(a.troops) && a.troops.length
+                ? a.troops.map((t) => `${formatNumber(t.quantity)} ${esc(t.name)}`).join(", ")
+                : a.ants ? `${formatNumber(a.ants)} fourmis` : "Troupes non détaillées";
+              return `
+                <div class="fmz-gb-row ${isWarn ? "soon" : ""}">
+                  <div class="fmz-gb-row-top">
+                    <b>${isCritical ? "🚨" : "🐎"} ${esc(a.attacker || "Inconnu")}</b>
+                    <span class="fmz-gb-cd ${urgencyClass}" data-cd="${a.arrivalAt}">${formatDuration(leftSec)}</span>
+                  </div>
+                  <div class="fmz-gb-sub">${troopsText}</div>
+                </div>
+              `;
+            })
+            .join("");
+
+      const incomingConvoysHtml = !convoys.incoming.length
+        ? `<div class="fmz-gb-empty">Aucun convoi en route vers moi.</div>`
+        : convoys.incoming
+            .map((c) => {
+              const leftSec = Math.max(0, Math.ceil((c.arrivalAt - now) / 1000));
+              return `
+                <div class="fmz-gb-row">
+                  <div class="fmz-gb-row-top">
+                    <span>De <b>${esc(c.fromName)}</b> · 🪵 ${formatNumber(c.wood)} · 🍎 ${formatNumber(c.apples)}</span>
+                    <span class="fmz-gb-cd" data-cd="${c.arrivalAt}">${formatDuration(leftSec)}</span>
+                  </div>
+                </div>
+              `;
+            })
+            .join("");
+
+      const huntsHtml = !allHunts.length
+        ? `<div class="fmz-gb-empty">Aucune chasse en cours dans l'alliance.</div>`
+        : allHunts
+            .map((h) => {
+              const leftSec = Math.max(0, Math.ceil((h.arrivalAt - now) / 1000));
+              const areaLabel = h.area ? ` · ${formatNumber(h.area)} cm²` : "";
+              return `
+                <div class="fmz-gb-row">
+                  <div class="fmz-gb-row-top">
+                    <span><b>${esc(h.player || "Joueur")}</b>${areaLabel}</span>
+                    <span class="fmz-gb-cd" data-cd="${h.arrivalAt}">${formatDuration(leftSec)}</span>
+                  </div>
+                </div>
+              `;
+            })
+            .join("");
+
+      const outgoingConvoysHtml = !convoys.outgoing.length
+        ? `<div class="fmz-gb-empty">Aucun convoi lancé en cours.</div>`
+        : convoys.outgoing
+            .map((c) => {
+              const leftSec = Math.max(0, Math.ceil((c.arrivalAt - now) / 1000));
+              return `
+                <div class="fmz-gb-row">
+                  <div class="fmz-gb-row-top">
+                    <span>Vers <b>${esc(c.toName)}</b> · 🪵 ${formatNumber(c.wood)} · 🍎 ${formatNumber(c.apples)}</span>
+                    <span class="fmz-gb-cd" data-cd="${c.arrivalAt}">${formatDuration(leftSec)}</span>
+                  </div>
+                </div>
+              `;
+            })
+            .join("");
+
+      const accountHtml = accountDrawerOpen
+        ? `
+          <div class="fmz-gb-account-box">
+            <div class="fmz-gb-sub">Pseudo / Session Worker :</div>
+            <div class="fmz-gb-account-row">
+              <input id="fmz-gb-pseudo-input" class="fmz-gb-account-input" type="text" value="${esc(devUser)}" autocomplete="off">
+              <button id="fmz-gb-pseudo-save" class="fmz-gb-btn" type="button">OK</button>
+              <button id="fmz-gb-logout-btn" class="fmz-gb-btn" type="button" title="Réinitialiser mot de passe et token">Reset</button>
+            </div>
+          </div>
+        `
+        : "";
+
+      const commerceShortcut = !IS_COMMERCE && openRequestsCount > 0
+        ? `<a class="fmz-gb-link" href="/commerce.php">🚚 Aller Commerce</a>`
+        : `<span>${esc(syncStatus.label)}</span>`;
+
+      cardHtml = `
+        <div id="fmz-gb-card">
+          <div class="fmz-gb-head">
+            <b>🐜 Dôme · ${esc(devUser)}</b>
+            <div class="fmz-gb-head-actions">
+              <button id="fmz-gb-refresh" class="fmz-gb-btn" type="button" title="Rafraîchir maintenant">🔄</button>
+              <button id="fmz-gb-acc" class="fmz-gb-btn" type="button" title="Compte & session">⚙️</button>
+              <button id="fmz-gb-close" class="fmz-gb-btn" type="button" title="Réduire">_</button>
+            </div>
+          </div>
+
+          <div class="fmz-gb-status-bar">
+            <span>${esc(syncStatus.label)}</span>
+            ${commerceShortcut}
+          </div>
+
+          ${accountHtml}
+
+          ${renderSectionBlock(
+            "attacks",
+            "🛡️ Attaques en cours sur moi",
+            incomingAttacks.length,
+            attacksHtml,
+            `danger ${hasImminentAttack ? "urgent" : ""}`,
+            !!collapsedMap.attacks
+          )}
+
+          ${renderSectionBlock(
+            "convoy_in",
+            "📥 Convois qui arrivent sur moi",
+            convoys.incoming.length,
+            incomingConvoysHtml,
+            "in",
+            !!collapsedMap.convoy_in
+          )}
+
+          ${renderSectionBlock(
+            "hunts",
+            "⚔️ Chasses en cours (tous)",
+            allHunts.length,
+            huntsHtml,
+            "hunt",
+            !!collapsedMap.hunts
+          )}
+
+          ${renderSectionBlock(
+            "convoy_out",
+            "📤 Convois que j'ai lancés",
+            convoys.outgoing.length,
+            outgoingConvoysHtml,
+            "out",
+            !!collapsedMap.convoy_out
+          )}
+        </div>
+      `;
+    }
+
+    root.innerHTML = `
+      ${cardHtml}
+      <div class="fmz-gb-dock">
+        <button id="fmz-gb-convoy-fab" class="fmz-gb-fab convoy ${isConvoyOpen ? "active" : ""}" type="button" title="Demandes et convois">
+          <span>🚚 Convois</span>
+          <span class="fmz-gb-pill">${openRequestsCount}</span>
+        </button>
+        <button id="fmz-gb-fab" class="fmz-gb-fab ${incomingAttacks.length > 0 ? "alert" : ""}" type="button" title="Résumé Dôme de la Paix">
+          <span>Dôme</span>
+          <span class="fmz-gb-pill">${domeBadge}</span>
+        </button>
+      </div>
+    `;
+
+    root.querySelector("#fmz-gb-fab").onclick = () => {
+      const next = !isGlobalBubbleOpen();
+      setGlobalBubbleOpen(next);
+      if (next) setConvoyBubbleOpen(false);
+      renderGlobalBubble();
+    };
+
+    root.querySelector("#fmz-gb-convoy-fab").onclick = () => {
+      const next = !isConvoyBubbleOpen();
+      setConvoyBubbleOpen(next);
+      if (next) setGlobalBubbleOpen(false);
+      renderGlobalBubble();
+    };
+
+    const closeDomeBtn = root.querySelector("#fmz-gb-close");
+    if (closeDomeBtn) {
+      closeDomeBtn.onclick = () => {
+        setGlobalBubbleOpen(false);
+        renderGlobalBubble();
+      };
+    }
+
+    const closeConvoyBtn = root.querySelector("#fmz-gb-cv-close");
+    if (closeConvoyBtn) {
+      closeConvoyBtn.onclick = () => {
+        setConvoyBubbleOpen(false);
+        renderGlobalBubble();
+      };
+    }
+
+    const refreshBtn = root.querySelector("#fmz-gb-refresh");
+    if (refreshBtn) {
+      refreshBtn.onclick = async () => {
+        setSyncState("syncing", "Synchro…");
+        renderGlobalBubble();
+        await pullFromWorker(true);
+        runPageCycle();
+      };
+    }
+
+    const accBtn = root.querySelector("#fmz-gb-acc");
+    if (accBtn) {
+      accBtn.onclick = () => {
+        accountDrawerOpen = !accountDrawerOpen;
+        renderGlobalBubble();
+      };
+    }
+
+    const savePseudoBtn = root.querySelector("#fmz-gb-pseudo-save");
+    const pseudoInp = root.querySelector("#fmz-gb-pseudo-input");
+    const logoutBtn = root.querySelector("#fmz-gb-logout-btn");
+
+    if (savePseudoBtn && pseudoInp) {
+      const submitPseudo = () => {
+        setDevUser(pseudoInp.value);
+        accountDrawerOpen = false;
+        runPageCycle();
+        pullFromWorker(true).then((changed) => {
+          if (changed) runPageCycle();
+          else renderGlobalBubble();
+        });
+      };
+      savePseudoBtn.onclick = submitPseudo;
+      pseudoInp.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          submitPseudo();
+        }
+      });
+    }
+
+    if (logoutBtn) {
+      logoutBtn.onclick = () => {
+        resetAccountSession(pseudoInp ? pseudoInp.value : "");
+        accountDrawerOpen = false;
+        runPageCycle();
+      };
+    }
+
+    root.querySelectorAll("[data-toggle-sec]").forEach((hdr) => {
+      hdr.onclick = () => {
+        const key = hdr.getAttribute("data-toggle-sec");
+        if (key) {
+          toggleSectionCollapsed(key);
+          renderGlobalBubble();
+        }
+      };
+    });
+
+    if (isConvoyOpen) {
+      bindConvoyBubbleEvents(root);
+    }
+  }
+
   function tickCountdowns() {
-    if (!IS_RESSOURCES && !IS_COMMERCE) return;
     const tNow = Date.now();
     let expired = false;
     document.querySelectorAll("[data-cd]").forEach((el) => {
@@ -1629,37 +2208,44 @@
     if (IS_RESSOURCES) {
       const hunts = reconcileHunts();
       renderRessourcesPanel(hunts);
-    } else if (IS_ARMEE) {
+    } else if (IS_ATTACK_PAGE) {
       ensureArmeeIndicator();
       reconcileArmeeAttacks();
     } else if (IS_COMMERCE) {
-      const active = document.activeElement;
-      if (active && active.closest && active.closest("#ddp-overlay")) return;
-      renderCommerceOverlay();
+      consumePendingCommerceFillIfNeeded();
     }
+    renderGlobalBubble();
   }
 
   runPageCycle();
+  consumePendingCommerceFillIfNeeded();
   pullFromWorker(true).then((changed) => {
     if (changed) runPageCycle();
+    else renderGlobalBubble();
   });
 
-  if (IS_RESSOURCES || IS_COMMERCE) {
-    setInterval(tickCountdowns, 1000);
-  }
+  setInterval(tickCountdowns, 1000);
 
   setInterval(() => {
     const active = document.activeElement;
-    if (active && (active.id === "fmz-dev-input" || active.id === "ddp-cv-user")) return;
+    if (
+      active &&
+      (active.id === "fmz-dev-input" ||
+        active.id === "fmz-gb-pseudo-input" ||
+        (active.closest && active.closest("#fmz-gb-root")))
+    ) {
+      return;
+    }
     runPageCycle();
   }, 5000);
 
   setInterval(() => {
     const active = document.activeElement;
-    if (active && active.closest && active.closest("#ddp-overlay")) return;
+    if (active && active.closest && active.closest("#fmz-gb-root")) return;
     if (active && active.id === "fmz-dev-input") return;
     pullFromWorker(false).then((changed) => {
       if (changed) runPageCycle();
+      else renderGlobalBubble();
     });
   }, 15000);
 
@@ -1667,10 +2253,19 @@
     if (
       e.key === STORAGE_KEYS.attacks ||
       e.key === STORAGE_KEYS.hunts ||
+      e.key === STORAGE_KEYS.movements ||
       e.key === STORAGE_KEYS.devUser ||
-      e.key === STORAGE_KEYS.convoyRequests
+      e.key === STORAGE_KEYS.convoyRequests ||
+      e.key === STORAGE_KEYS.bubbleOpen ||
+      e.key === STORAGE_KEYS.convoyBubbleOpen ||
+      e.key === STORAGE_KEYS.bubbleSections
     ) {
       runPageCycle();
     }
   });
 })();
+
+
+
+
+ 
