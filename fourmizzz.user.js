@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Le Dôme De La Paix - Fourmizzz S5 (Ressources, Armee & Commerce)
 // @namespace    https://s5.fourmizzz.fr/
-// @version      0.5.11-worker
+// @version      0.5.12-worker
 // @updateURL    https://raw.githubusercontent.com/LDDLP/applizze-script/main/fourmizzz.user.js
 // @downloadURL  https://raw.githubusercontent.com/LDDLP/applizze-script/main/fourmizzz.user.js
 // @description  Outils d'alliance centralisés : chasses & attaques entrantes (Ressources), détection d'attaques (Armee), et convois (Commerce) avec relai Worker.
@@ -997,6 +997,7 @@
   let convoyTab = "requests";
   let convoyFilter = "open";
   const convoyDrafts = {};
+  let lastCommerceMessage = "";
 
   function saveConvoyRequestsLocal() {
     writeJsonArray(STORAGE_KEYS.convoyRequests, convoyRequests);
@@ -1012,9 +1013,10 @@
   }
 
   function calcTravelSeconds(fromP, toP) {
-    if (!fromP || !toP) return 0;
-    const d = Math.hypot(fromP.x - toP.x, fromP.y - toP.y);
-    return Math.round((1 - Math.exp(-d / 350)) * 7.375 * 86400 * Math.pow(0.9, fromP.va || 0));
+    if (!fromP || !toP) return 60;
+    const d = Math.hypot((fromP.x || 0) - (toP.x || 0), (fromP.y || 0) - (toP.y || 0));
+    const sec = Math.round((1 - Math.exp(-d / 350)) * 7.375 * 86400 * Math.pow(0.9, fromP.va || 0));
+    return sec > 0 ? sec : 60;
   }
 
   function reqDelivered(r) {
@@ -1030,6 +1032,17 @@
       wood: Math.max(0, (r.wood || 0) - del.wood),
       apples: Math.max(0, (r.apples || 0) - del.apples)
     };
+  }
+
+  function hasActiveDelivery(r, now = Date.now()) {
+    return (r.deliveries || []).some(
+      (d) => Number(d.arrivalAt || 0) > now || Number(d.wood || 0) > 0 || Number(d.apples || 0) > 0
+    );
+  }
+
+  function clampNonNegativeInt(raw) {
+    const n = Math.floor(Number(raw || 0));
+    return Number.isFinite(n) && n > 0 ? n : 0;
   }
 
   function fillCommerceFormFields({ recipient, apples, wood }) {
@@ -1107,6 +1120,7 @@
       .ddp-tab,.ddp-filter,.ddp-btn{padding:7px 6px;border-radius:7px;border:1px solid #4b5563;background:#111827;color:#e5e7eb;cursor:pointer;font-weight:bold;font-size:12px;text-align:center}
       .ddp-tab.active,.ddp-filter.active{background:#374151;border-color:#9ca3af;color:#fff}
       .ddp-btn.primary{background:#166534;border-color:#15803d;width:100%;margin-top:8px}
+      .ddp-btn.max-btn{background:#1e3a8a;border-color:#3b82f6;color:#fff;flex:0 0 auto;min-width:72px}
       .ddp-btn.danger{background:#7f1d1d;border-color:#991b1b}
       .ddp-input,.ddp-select{width:100%;padding:7px;margin-top:4px;border-radius:6px;border:1px solid #4b5563;background:#111827;color:#fff;font-size:13px}
       .ddp-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
@@ -1118,10 +1132,20 @@
       .ddp-tag.done{background:#166534}
       .ddp-tag.taken{background:#854d0e}
       .ddp-actions{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
-      .ddp-actions button{flex:1;min-width:100px}
+      .ddp-actions button{flex:1;min-width:90px}
       .ddp-msg{margin-top:8px;font-size:12px;color:#86efac}
+      .ddp-warn{color:#fca5a5}
     `;
     document.head.appendChild(style);
+  }
+
+  function setCommerceBanner(box, text, isWarn = false) {
+    lastCommerceMessage = text;
+    const msgBox = box && box.querySelector("#ddp-cv-msg");
+    if (msgBox) {
+      msgBox.className = isWarn ? "ddp-msg ddp-warn" : "ddp-msg";
+      msgBox.textContent = text;
+    }
   }
 
   function renderCommerceOverlay() {
@@ -1164,7 +1188,7 @@
       if (convoyFilter === "open") filtered = filtered.filter((r) => r.status !== "done");
       else if (convoyFilter === "done") filtered = filtered.filter((r) => r.status === "done");
       else if (convoyFilter === "ongoing") {
-        filtered = filtered.filter((r) => (r.deliveries || []).some((d) => d.arrivalAt > now));
+        filtered = filtered.filter((r) => r.status !== "done" && hasActiveDelivery(r, now));
       }
 
       const cardsHtml = !filtered.length
@@ -1181,24 +1205,32 @@
                   : `<span class="ddp-tag">🟦 Ouverte</span>`;
 
               const dr = convoyDrafts[r.id] || {};
-              const wVal = dr.wood !== undefined ? dr.wood : rem.wood || "";
-              const aVal = dr.apples !== undefined ? dr.apples : rem.apples || "";
+              const wVal = dr.wood !== undefined ? dr.wood : rem.wood || 0;
+              const aVal = dr.apples !== undefined ? dr.apples : rem.apples || 0;
+
+              const deliveriesSummary =
+                Array.isArray(r.deliveries) && r.deliveries.length
+                  ? `<div class="ddp-muted" style="margin-top:4px">🚚 Envoyé : ${r.deliveries
+                      .map((d) => `${esc(d.by || d.loggedBy || "Joueur")} (🪵 ${formatNumber(d.wood)} · 🍎 ${formatNumber(d.apples)})`)
+                      .join(", ")}</div>`
+                  : "";
 
               const sendForm = !done
                 ? `
                   <div class="ddp-grid" style="margin-top:8px">
                     ${
                       rem.wood > 0
-                        ? `<div><label class="ddp-label">🪵 Bois à envoyer</label><input class="ddp-input" data-df="wood" data-did="${esc(r.id)}" type="number" min="0" max="${rem.wood}" value="${esc(wVal)}"></div>`
+                        ? `<div><label class="ddp-label">🪵 Bois restant : ${formatNumber(rem.wood)}</label><input class="ddp-input" data-df="wood" data-did="${esc(r.id)}" data-max="${rem.wood}" type="number" min="0" max="${rem.wood}" value="${esc(wVal)}"></div>`
                         : ""
                     }
                     ${
                       rem.apples > 0
-                        ? `<div><label class="ddp-label">🍎 Pommes à envoyer</label><input class="ddp-input" data-df="apples" data-did="${esc(r.id)}" type="number" min="0" max="${rem.apples}" value="${esc(aVal)}"></div>`
+                        ? `<div><label class="ddp-label">🍎 Pommes restantes : ${formatNumber(rem.apples)}</label><input class="ddp-input" data-df="apples" data-did="${esc(r.id)}" data-max="${rem.apples}" type="number" min="0" max="${rem.apples}" value="${esc(aVal)}"></div>`
                         : ""
                     }
                   </div>
                   <div class="ddp-actions">
+                    <button class="ddp-btn max-btn" data-act="max" data-id="${esc(r.id)}" type="button">Max</button>
                     <button class="ddp-btn primary" style="margin-top:0" data-act="send" data-id="${esc(r.id)}" type="button">🚚 Lancer convoi</button>
                     <button class="ddp-btn" data-act="archive" data-id="${esc(r.id)}" type="button">📦 Archiver</button>
                   </div>
@@ -1213,6 +1245,7 @@
                       ? ` <span class="ddp-muted">(reste 🪵 ${formatNumber(rem.wood)} · 🍎 ${formatNumber(rem.apples)})</span>`
                       : ""
                   }</div>
+                  ${deliveriesSummary}
                   ${r.note ? `<div class="ddp-muted" style="margin-top:4px">💬 ${esc(r.note)}</div>` : ""}
                   ${sendForm}
                 </div>
@@ -1236,7 +1269,7 @@
           <label class="ddp-label">Motif</label>
           <input class="ddp-input" id="ddp-new-note" type="text" maxlength="200" placeholder="Ex : construction / évolution">
           <button class="ddp-btn primary" id="ddp-add-req" type="button">📨 Envoyer la demande</button>
-          <div class="ddp-msg" id="ddp-cv-msg"></div>
+          <div class="ddp-msg" id="ddp-cv-msg">${esc(lastCommerceMessage)}</div>
         </div>
       `;
     } else {
@@ -1254,7 +1287,7 @@
             <div><label class="ddp-label">🍎 Pommes</label><input class="ddp-input" id="ddp-cv-apples" type="number" min="0" placeholder="0"></div>
           </div>
           <button class="ddp-btn primary" id="ddp-send-direct" type="button">🚀 Lancer le convoi</button>
-          <div class="ddp-msg" id="ddp-cv-msg"></div>
+          <div class="ddp-msg" id="ddp-cv-msg">${esc(lastCommerceMessage)}</div>
         </div>
       `;
     }
@@ -1313,23 +1346,30 @@
     box.querySelectorAll("[data-df]").forEach((inp) => {
       inp.addEventListener("input", () => {
         const id = inp.dataset.did;
+        const maxVal = clampNonNegativeInt(inp.dataset.max);
+        let val = clampNonNegativeInt(inp.value);
+        if (val > maxVal) {
+          val = maxVal;
+          inp.value = String(maxVal);
+          setCommerceBanner(box, `⚠️ Maximum autorisé pour cette demande : ${formatNumber(maxVal)}.`, true);
+        }
         convoyDrafts[id] = convoyDrafts[id] || {};
-        convoyDrafts[id][inp.dataset.df] = inp.value;
+        convoyDrafts[id][inp.dataset.df] = val;
       });
     });
 
     const addReqBtn = box.querySelector("#ddp-add-req");
     if (addReqBtn) {
       addReqBtn.onclick = () => {
-        const wood = Math.max(0, Math.floor(Number(box.querySelector("#ddp-new-wood").value || 0)));
-        const apples = Math.max(0, Math.floor(Number(box.querySelector("#ddp-new-apples").value || 0)));
+        const wood = clampNonNegativeInt(box.querySelector("#ddp-new-wood").value);
+        const apples = clampNonNegativeInt(box.querySelector("#ddp-new-apples").value);
         const note = String(box.querySelector("#ddp-new-note").value || "").trim();
         if (wood <= 0 && apples <= 0) {
-          box.querySelector("#ddp-cv-msg").textContent = "⚠️ Indique du bois et/ou des pommes.";
+          setCommerceBanner(box, "⚠️ Indique du bois et/ou des pommes.", true);
           return;
         }
         if (!note) {
-          box.querySelector("#ddp-cv-msg").textContent = "⚠️ Le motif est obligatoire.";
+          setCommerceBanner(box, "⚠️ Le motif est obligatoire.", true);
           return;
         }
         const newReq = {
@@ -1346,6 +1386,7 @@
         convoyRequests.push(newReq);
         saveConvoyRequestsLocal();
         syncWithWorker({ kind: "requests", action: "create", request: newReq }, false);
+        setCommerceBanner(box, "✓ Demande de convoi enregistrée.", false);
         renderCommerceOverlay();
       };
     }
@@ -1356,13 +1397,13 @@
         const sender = findPlayerByPseudo(getDevUser()) || { name: getDevUser(), x: 0, y: 0, va: 0 };
         const destName = box.querySelector("#ddp-cv-dest").value;
         const dest = findPlayerByPseudo(destName) || { name: destName, x: 0, y: 0, va: 0 };
-        const wood = Math.max(0, Math.floor(Number(box.querySelector("#ddp-cv-wood").value || 0)));
-        const apples = Math.max(0, Math.floor(Number(box.querySelector("#ddp-cv-apples").value || 0)));
+        const wood = clampNonNegativeInt(box.querySelector("#ddp-cv-wood").value);
+        const apples = clampNonNegativeInt(box.querySelector("#ddp-cv-apples").value);
         if (wood <= 0 && apples <= 0) {
-          box.querySelector("#ddp-cv-msg").textContent = "⚠️ Indique du bois et/ou des pommes.";
+          setCommerceBanner(box, "⚠️ Indique du bois et/ou des pommes.", true);
           return;
         }
-        const dur = Math.max(1, calcTravelSeconds(sender, dest));
+        const dur = calcTravelSeconds(sender, dest);
         const tNow = Date.now();
         const mv = {
           id: tNow + "_" + Math.floor(Math.random() * 1e6),
@@ -1383,7 +1424,8 @@
         convoyLog.push({ from: sender.name, to: dest.name, wood, apples, arrivalAt: tNow + dur * 1000 });
         saveConvoyLog();
         fillCommerceFormFields({ recipient: dest.name, apples, wood });
-        box.querySelector("#ddp-cv-msg").textContent = `✓ Champs pré-remplis pour ${dest.name} (${formatDuration(dur)}). Vérifie et clique sur "Lancer le convoi".`;
+        setCommerceBanner(box, `✓ Convoi enregistré (${formatDuration(dur)}) et champs pré-remplis pour ${dest.name}.`, false);
+        renderCommerceOverlay();
       };
     }
 
@@ -1404,18 +1446,44 @@
           saveConvoyRequestsLocal();
           syncWithWorker({ kind: "requests", action: "delete", id: r.id }, false);
           renderCommerceOverlay();
+        } else if (act === "max") {
+          const rem = reqRemaining(r);
+          convoyDrafts[r.id] = {
+            wood: rem.wood,
+            apples: rem.apples
+          };
+          setCommerceBanner(box, `✓ Quantités réglées au maximum restant pour ${r.player}.`, false);
+          renderCommerceOverlay();
         } else if (act === "send") {
           const card = btn.closest(".ddp-card");
           const rem = reqRemaining(r);
           const wInp = card.querySelector('[data-df="wood"]');
           const aInp = card.querySelector('[data-df="apples"]');
-          const wood = wInp ? Math.max(0, Math.min(rem.wood, Math.floor(Number(wInp.value || 0)))) : 0;
-          const apples = aInp ? Math.max(0, Math.min(rem.apples, Math.floor(Number(aInp.value || 0)))) : 0;
-          if (wood <= 0 && apples <= 0) return;
+          const rawWood = wInp ? clampNonNegativeInt(wInp.value) : 0;
+          const rawApples = aInp ? clampNonNegativeInt(aInp.value) : 0;
+
+          if (rawWood > rem.wood || rawApples > rem.apples) {
+            setCommerceBanner(
+              box,
+              `⚠️ Impossible d'envoyer plus que le reste demandé (max 🪵 ${formatNumber(rem.wood)} · 🍎 ${formatNumber(rem.apples)}).`,
+              true
+            );
+            return;
+          }
+
+          const wood = Math.min(rem.wood, rawWood);
+          const apples = Math.min(rem.apples, rawApples);
+
+          if (wood <= 0 && apples <= 0) {
+            setCommerceBanner(box, "⚠️ Indique une quantité supérieure à 0.", true);
+            return;
+          }
+
           const sender = findPlayerByPseudo(getDevUser()) || { name: getDevUser(), x: 0, y: 0, va: 0 };
           const dest = findPlayerByPseudo(r.player) || { name: r.player, x: 0, y: 0, va: 0 };
-          const dur = Math.max(1, calcTravelSeconds(sender, dest));
+          const dur = calcTravelSeconds(sender, dest);
           const tNow = Date.now();
+          const arrivalAt = tNow + dur * 1000;
           const mvs = readJsonArray(STORAGE_KEYS.movements);
           const mvId = tNow + "_" + Math.floor(Math.random() * 1e6);
           const mv = {
@@ -1425,25 +1493,37 @@
             to: dest,
             duration: dur,
             startAt: tNow,
-            arrivalAt: tNow + dur * 1000,
+            arrivalAt,
             wood,
             apples,
+            requestId: r.id,
             createdBy: getDevUser()
           };
           mvs.push(mv);
           writeJsonArray(STORAGE_KEYS.movements, mvs);
+          convoyLog.push({
+            from: sender.name,
+            to: dest.name,
+            wood,
+            apples,
+            requestId: r.id,
+            arrivalAt
+          });
+          saveConvoyLog();
+
           const delivery = {
             by: sender.name,
             loggedBy: getDevUser(),
             wood,
             apples,
             at: tNow,
-            arrivalAt: tNow + dur * 1000,
+            arrivalAt,
             movementId: mvId
           };
           r.deliveries.push(delivery);
           const leftAfter = reqRemaining(r);
-          if (leftAfter.wood === 0 && leftAfter.apples === 0) {
+          const isPartial = leftAfter.wood > 0 || leftAfter.apples > 0;
+          if (!isPartial) {
             r.status = "done";
             r.doneAt = tNow;
           }
@@ -1452,11 +1532,15 @@
           syncWithWorker({ kind: "movements", action: "create", movement: mv }, false);
           syncWithWorker({ kind: "requests", action: "deliver", id: r.id, delivery }, false);
           fillCommerceFormFields({ recipient: dest.name, apples, wood });
+
+          setCommerceBanner(
+            box,
+            isPartial
+              ? `✓ Convoi partiel enregistré (🪵 ${formatNumber(wood)} · 🍎 ${formatNumber(apples)}) vers ${dest.name}. Visible dans En cours.`
+              : `✓ Convoi complet enregistré vers ${dest.name}.`,
+            false
+          );
           renderCommerceOverlay();
-          const msgBox = box.querySelector("#ddp-cv-msg");
-          if (msgBox) {
-            msgBox.textContent = `✓ Champs pré-remplis pour ${dest.name}. Vérifie et clique sur "Lancer le convoi" de Fourmizzz.`;
-          }
         }
       };
     });
