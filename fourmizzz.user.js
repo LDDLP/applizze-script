@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Le Dôme De La Paix - Fourmizzz S5 (Ressources, Armee & Commerce)
 // @namespace    https://s5.fourmizzz.fr/
-// @version      0.5.10-worker
+// @version      0.5.11-worker
 // @updateURL    https://raw.githubusercontent.com/LDDLP/applizze-script/main/fourmizzz.user.js
 // @downloadURL  https://raw.githubusercontent.com/LDDLP/applizze-script/main/fourmizzz.user.js
 // @description  Outils d'alliance centralisés : chasses & attaques entrantes (Ressources), détection d'attaques (Armee), et convois (Commerce) avec relai Worker.
@@ -35,9 +35,6 @@
 
   const DEFAULT_DEV_USER = "DEADKAT";
 
-  // Chaque joueur utilise SON pseudo et SON mot de passe, saisis une seule fois
-  // au premier lancement (aucun mot de passe n'est écrit dans ce fichier).
-  // autoRegister: true => si le compte n'existe pas encore, il est créé automatiquement.
   const WORKER_CONFIG = {
     enabled: true,
     endpoint: "https://applizze-worker.devreuxbenoit571.workers.dev",
@@ -50,15 +47,13 @@
   };
 
   let promptedThisLoad = false;
-
   let cachedWorkerToken = "";
   let loginPromise = null;
 
-  // Anti-spam KV : on n'envoie au Worker que si les données ont changé,
-  // et on attend 60 s après un échec avant de réessayer.
   const lastSentSig = {};
   let nextRetryAt = 0;
   const RETRY_DELAY_MS = 60 * 1000;
+  let lastSyncUpdatedAt = 0;
 
   const DEFAULT_PLAYERS = [
     { name: "Peps", x: 80, y: 52, va: 0 },
@@ -104,10 +99,10 @@
       localStorage.setItem(STORAGE_KEYS.devUser, clean);
     } catch (e) {}
     if (changed) {
-      // Autre pseudo => autre compte : on oublie token et mot de passe
       setStoredToken("");
       setStoredPassword("");
       Object.keys(lastSentSig).forEach((k) => delete lastSentSig[k]);
+      lastSyncUpdatedAt = 0;
       nextRetryAt = 0;
     }
     return clean;
@@ -307,7 +302,6 @@
     const authCfg = (WORKER_CONFIG && WORKER_CONFIG.auth) || {};
     const mode = String(authCfg.mode || "member").toLowerCase();
 
-    // Premier lancement : on demande le pseudo Fourmizzz du joueur
     if (!authCfg.pseudo && !hasStoredDevUser() && !promptedThisLoad) {
       promptedThisLoad = true;
       const typedPseudo = window.prompt("Dôme de la Paix : quel est ton pseudo Fourmizzz ?", "");
@@ -318,7 +312,6 @@
     const configPassword = String(authCfg.password || "");
     let password = configPassword || getStoredPassword();
 
-    // Pas de mot de passe enregistré : on le demande une seule fois
     if (!password && hasStoredDevUser()) {
       const typedPass = window.prompt(
         "Dôme de la Paix : mot de passe pour « " + pseudo + " » (le compte est créé s'il n'existe pas encore).",
@@ -350,7 +343,6 @@
       }
     }
 
-    // Mot de passe refusé : on l'oublie pour le redemander au prochain chargement
     if (loginRes.status === 401 && !configPassword) setStoredPassword("");
 
     return { ok: false, error: loginRes.error || "Connexion au Worker refusée" };
@@ -377,7 +369,7 @@
     return "/api/state";
   }
 
-  async function syncWithWorker(payload) {
+  async function syncWithWorker(payload, dedupKey = null) {
     if (!WORKER_CONFIG.enabled) {
       return { ok: true, mode: "local-only" };
     }
@@ -387,17 +379,18 @@
       return { ok: false, mode: "missing-endpoint", error: "URL Worker manquante" };
     }
 
-    // Rien à envoyer si les données n'ont pas changé depuis le dernier envoi réussi
     const kind = (payload && payload.kind) || "state";
+    const cacheKey = dedupKey === false ? "" : (dedupKey || kind);
     let sig = "";
-    try {
-      sig = JSON.stringify(payload);
-    } catch (e) {}
-    if (sig && lastSentSig[kind] === sig) {
-      return { ok: true, mode: "unchanged" };
+    if (cacheKey) {
+      try {
+        sig = JSON.stringify(payload);
+      } catch (e) {}
+      if (sig && lastSentSig[cacheKey] === sig) {
+        return { ok: true, mode: "unchanged" };
+      }
     }
 
-    // Après un échec, on patiente avant de réessayer
     if (Date.now() < nextRetryAt) {
       return { ok: false, mode: "backoff", error: "Nouvel essai différé" };
     }
@@ -420,12 +413,134 @@
     }
 
     if (res.ok) {
-      if (sig) lastSentSig[kind] = sig;
+      if (cacheKey && sig) lastSentSig[cacheKey] = sig;
     } else {
       nextRetryAt = Date.now() + RETRY_DELAY_MS;
     }
 
     return res;
+  }
+
+  function mergeRemoteHunts(remoteHunts) {
+    const now = Date.now();
+    const myNorm = normalizePseudo(getDevUser());
+    const localList = readJsonArray(STORAGE_KEYS.hunts).filter((h) => h && h.arrivalAt > now - 5000);
+    const mineLocal = localList.filter((h) => normalizePseudo(h.player) === myNorm);
+
+    const othersRemote = remoteHunts
+      .filter((m) => normalizePseudo(m.from && m.from.name) !== myNorm && Number(m.arrivalAt) > now)
+      .map((m) => ({
+        id: String(m.id),
+        sig: String(m.id),
+        type: "hunt",
+        player: (m.from && m.from.name) || "Joueur",
+        area: Number(m.area) || 0,
+        troops: Array.isArray(m.troops) ? m.troops : [],
+        arrivalLabel: m.arrivalLabel || "",
+        detectedAt: Number(m.startAt) || now,
+        arrivalAt: Number(m.arrivalAt),
+        active: true
+      }));
+
+    const merged = mineLocal.concat(othersRemote);
+    writeJsonArray(STORAGE_KEYS.hunts, merged);
+    return merged;
+  }
+
+  function mergeRemoteAttacks(remoteAttacks) {
+    const now = Date.now();
+    const myNorm = normalizePseudo(getDevUser());
+    const localList = readJsonArray(STORAGE_KEYS.attacks).filter((a) => a && a.arrivalAt > now - 5000);
+    const mineLocal = localList.filter((a) => normalizePseudo(a.attacker) === myNorm);
+
+    const othersRemote = remoteAttacks
+      .filter((m) => normalizePseudo(m.from && m.from.name) !== myNorm && Number(m.arrivalAt) > now)
+      .map((m) => {
+        const targetName = (m.to && m.to.name) || "";
+        const troops = Array.isArray(m.troops) ? m.troops : [];
+        const totalAnts = Number(m.ants) || troops.reduce((s, t) => s + (Number(t.quantity) || 0), 0);
+        return {
+          id: String(m.id),
+          sig: String(m.id),
+          type: "attack",
+          attacker: (m.from && m.from.name) || "Inconnu",
+          target: targetName,
+          targetPseudo: normalizePseudo(targetName),
+          targetKind: m.targetKind || "",
+          troops,
+          ants: totalAnts,
+          arrivalLabel: m.arrivalLabel || "",
+          detectedAt: Number(m.startAt) || now,
+          arrivalAt: Number(m.arrivalAt),
+          active: true
+        };
+      });
+
+    const merged = mineLocal.concat(othersRemote);
+    writeJsonArray(STORAGE_KEYS.attacks, merged);
+    return merged;
+  }
+
+  function mergeRemoteConvoys(remoteConvoys) {
+    const now = Date.now();
+    const localList = readJsonArray(STORAGE_KEYS.movements).filter((m) => m && Number(m.arrivalAt) > now - 5000);
+    const byId = new Map(localList.map((m) => [String(m.id), m]));
+
+    for (const m of remoteConvoys) {
+      if (!m || m.id === undefined || Number(m.arrivalAt) <= now) continue;
+      byId.set(String(m.id), m);
+    }
+
+    const merged = Array.from(byId.values());
+    writeJsonArray(STORAGE_KEYS.movements, merged);
+    return merged;
+  }
+
+  async function pullFromWorker(force = false) {
+    if (!WORKER_CONFIG.enabled) return false;
+    const baseUrl = String(WORKER_CONFIG.endpoint || "").replace(/\/+$/, "");
+    if (!baseUrl || Date.now() < nextRetryAt) return false;
+
+    let token = await ensureWorkerToken(baseUrl, false);
+    if (!token) return false;
+
+    const sinceParam = !force && lastSyncUpdatedAt ? `?since=${encodeURIComponent(lastSyncUpdatedAt)}` : "";
+    let res = await httpJsonRequest("GET", `${baseUrl}/api/sync${sinceParam}`, undefined, token);
+
+    if (!res.ok && res.status === 401) {
+      setStoredToken("");
+      token = await ensureWorkerToken(baseUrl, true);
+      if (token) {
+        res = await httpJsonRequest("GET", `${baseUrl}/api/sync${sinceParam}`, undefined, token);
+      }
+    }
+
+    if (!res.ok) {
+      nextRetryAt = Date.now() + RETRY_DELAY_MS;
+      return false;
+    }
+
+    const data = res.data || {};
+    if (data.unchanged) return false;
+
+    if (typeof data.updatedAt === "number") {
+      lastSyncUpdatedAt = data.updatedAt;
+    }
+
+    const allMovements = Array.isArray(data.movements) ? data.movements : [];
+    mergeRemoteHunts(allMovements.filter((m) => m && m.type === "hunt"));
+    mergeRemoteAttacks(allMovements.filter((m) => m && m.type === "attack"));
+    mergeRemoteConvoys(allMovements.filter((m) => m && m.type === "convoy"));
+
+    if (Array.isArray(data.requests)) {
+      convoyRequests = data.requests.map((r) => ({
+        ...r,
+        deliveries: Array.isArray(r.deliveries) ? r.deliveries : []
+      }));
+      writeJsonArray(STORAGE_KEYS.convoyRequests, convoyRequests);
+    }
+
+    return true;
   }
 
   function extractHuntsFromPage() {
@@ -528,7 +643,8 @@
 
     const nextHunts = Array.from(bySig.values());
     writeJsonArray(STORAGE_KEYS.hunts, nextHunts);
-    syncWithWorker({ kind: "hunts", player: playerName, hunts: nextHunts });
+    const myHunts = nextHunts.filter((h) => normalizePseudo(h.player) === normPlayer);
+    syncWithWorker({ kind: "hunts", player: playerName, hunts: myHunts });
     return nextHunts;
   }
 
@@ -732,7 +848,8 @@
 
     const nextAttacks = Array.from(bySig.values());
     writeJsonArray(STORAGE_KEYS.attacks, nextAttacks);
-    syncWithWorker({ kind: "attacks", attacker: attackerName, attacks: nextAttacks });
+    const myAttacks = nextAttacks.filter((a) => normalizePseudo(a.attacker) === normAttacker);
+    syncWithWorker({ kind: "attacks", attacker: attackerName, attacks: myAttacks });
 
     const snapshotKey = currentScan.map((a) => a.sig).sort().join("||");
     if (currentScan.length > 0 && (addedOrUpdatedCount > 0 || snapshotKey !== lastArmeeSnapshotKey)) {
@@ -805,6 +922,9 @@
       const applyDevChange = () => {
         setDevUser(inputEl.value);
         runPageCycle();
+        pullFromWorker(true).then((changed) => {
+          if (changed) runPageCycle();
+        });
       };
       saveBtn.addEventListener("click", (e) => {
         e.preventDefault();
@@ -878,9 +998,8 @@
   let convoyFilter = "open";
   const convoyDrafts = {};
 
-  function saveConvoyRequests() {
+  function saveConvoyRequestsLocal() {
     writeJsonArray(STORAGE_KEYS.convoyRequests, convoyRequests);
-    syncWithWorker({ kind: "convoy_requests", requests: convoyRequests });
   }
 
   function saveConvoyLog() {
@@ -913,7 +1032,6 @@
     };
   }
 
-  // Remplit les bulles 1 (Destinataire), 2 (Pommes) et 3 (Bois), sans toucher à la 4e ni à l'envoi
   function fillCommerceFormFields({ recipient, apples, wood }) {
     if (!IS_COMMERCE) return;
 
@@ -1166,6 +1284,9 @@
     const applyUser = () => {
       setDevUser(userInput.value);
       renderCommerceOverlay();
+      pullFromWorker(true).then((changed) => {
+        if (changed) renderCommerceOverlay();
+      });
     };
     box.querySelector("#ddp-cv-user-ok").onclick = applyUser;
     userInput.addEventListener("keydown", (e) => {
@@ -1211,7 +1332,7 @@
           box.querySelector("#ddp-cv-msg").textContent = "⚠️ Le motif est obligatoire.";
           return;
         }
-        convoyRequests.push({
+        const newReq = {
           id: Date.now() + "_" + Math.floor(Math.random() * 1e6),
           player: getDevUser(),
           wood,
@@ -1221,8 +1342,10 @@
           deliveries: [],
           createdAt: Date.now(),
           createdBy: getDevUser()
-        });
-        saveConvoyRequests();
+        };
+        convoyRequests.push(newReq);
+        saveConvoyRequestsLocal();
+        syncWithWorker({ kind: "requests", action: "create", request: newReq }, false);
         renderCommerceOverlay();
       };
     }
@@ -1241,8 +1364,7 @@
         }
         const dur = Math.max(1, calcTravelSeconds(sender, dest));
         const tNow = Date.now();
-        const mvs = readJsonArray(STORAGE_KEYS.movements);
-        mvs.push({
+        const mv = {
           id: tNow + "_" + Math.floor(Math.random() * 1e6),
           type: "convoy",
           from: sender,
@@ -1253,8 +1375,11 @@
           wood,
           apples,
           createdBy: getDevUser()
-        });
+        };
+        const mvs = readJsonArray(STORAGE_KEYS.movements);
+        mvs.push(mv);
         writeJsonArray(STORAGE_KEYS.movements, mvs);
+        syncWithWorker({ kind: "movements", action: "create", movement: mv }, false);
         convoyLog.push({ from: sender.name, to: dest.name, wood, apples, arrivalAt: tNow + dur * 1000 });
         saveConvoyLog();
         fillCommerceFormFields({ recipient: dest.name, apples, wood });
@@ -1271,11 +1396,13 @@
           r.status = "done";
           r.doneAt = Date.now();
           r.archivedBy = getDevUser();
-          saveConvoyRequests();
+          saveConvoyRequestsLocal();
+          syncWithWorker({ kind: "requests", action: "archive", id: r.id, doneAt: r.doneAt }, false);
           renderCommerceOverlay();
         } else if (act === "delete") {
           convoyRequests = convoyRequests.filter((item) => item.id !== r.id);
-          saveConvoyRequests();
+          saveConvoyRequestsLocal();
+          syncWithWorker({ kind: "requests", action: "delete", id: r.id }, false);
           renderCommerceOverlay();
         } else if (act === "send") {
           const card = btn.closest(".ddp-card");
@@ -1291,7 +1418,7 @@
           const tNow = Date.now();
           const mvs = readJsonArray(STORAGE_KEYS.movements);
           const mvId = tNow + "_" + Math.floor(Math.random() * 1e6);
-          mvs.push({
+          const mv = {
             id: mvId,
             type: "convoy",
             from: sender,
@@ -1302,9 +1429,10 @@
             wood,
             apples,
             createdBy: getDevUser()
-          });
+          };
+          mvs.push(mv);
           writeJsonArray(STORAGE_KEYS.movements, mvs);
-          r.deliveries.push({
+          const delivery = {
             by: sender.name,
             loggedBy: getDevUser(),
             wood,
@@ -1312,14 +1440,17 @@
             at: tNow,
             arrivalAt: tNow + dur * 1000,
             movementId: mvId
-          });
+          };
+          r.deliveries.push(delivery);
           const leftAfter = reqRemaining(r);
           if (leftAfter.wood === 0 && leftAfter.apples === 0) {
             r.status = "done";
             r.doneAt = tNow;
           }
           delete convoyDrafts[r.id];
-          saveConvoyRequests();
+          saveConvoyRequestsLocal();
+          syncWithWorker({ kind: "movements", action: "create", movement: mv }, false);
+          syncWithWorker({ kind: "requests", action: "deliver", id: r.id, delivery }, false);
           fillCommerceFormFields({ recipient: dest.name, apples, wood });
           renderCommerceOverlay();
           const msgBox = box.querySelector("#ddp-cv-msg");
@@ -1359,6 +1490,9 @@
   }
 
   runPageCycle();
+  pullFromWorker(true).then((changed) => {
+    if (changed) runPageCycle();
+  });
 
   if (IS_RESSOURCES) {
     setInterval(tickCountdowns, 1000);
@@ -1369,6 +1503,15 @@
     if (active && (active.id === "fmz-dev-input" || active.id === "ddp-cv-user")) return;
     runPageCycle();
   }, 5000);
+
+  setInterval(() => {
+    const active = document.activeElement;
+    if (active && active.closest && active.closest("#ddp-overlay")) return;
+    if (active && active.id === "fmz-dev-input") return;
+    pullFromWorker(false).then((changed) => {
+      if (changed) runPageCycle();
+    });
+  }, 15000);
 
   window.addEventListener("storage", (e) => {
     if (
