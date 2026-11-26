@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Le Dôme De La Paix - Fourmizzz S5 (Ressources, Armee & Commerce)
 // @namespace    https://s5.fourmizzz.fr/
-// @version      0.5.22-worker
+// @version      0.5.23-worker
 // @updateURL    https://raw.githubusercontent.com/LDDLP/applizze-script/main/fourmizzz.user.js
 // @downloadURL  https://raw.githubusercontent.com/LDDLP/applizze-script/main/fourmizzz.user.js
 // @description  Outils d'alliance centralisés : chasses & attaques entrantes (Ressources), détection d'attaques (Armee & ennemie), convois (Commerce) et bulles flottantes globales avec relai Worker.
@@ -21,6 +21,11 @@
   const IS_ENNEMIE = PATH.includes("ennemie.php");
   const IS_ATTACK_PAGE = IS_ARMEE || IS_ENNEMIE;
   const IS_COMMERCE = PATH.includes("commerce.php");
+
+  const SHORTCUT_LINKS = {
+    discordUrl: "https://discord.com/app",
+    siteUrl: "https://applizzz.pages.dev/"
+  };
 
   const STORAGE_KEYS = {
     hunts: "fmz_local_hunts_v1",
@@ -841,7 +846,6 @@
     if (!Array.isArray(r.deliveries)) r.deliveries = [];
   });
   let convoyLog = readJsonArray(STORAGE_KEYS.convoyLog);
-  let convoyFilter = "open";
   const convoyDrafts = {};
   let lastCommerceMessage = "";
   let accountDrawerOpen = false;
@@ -1533,6 +1537,38 @@
     };
   }
 
+  function renderSideDiscordTab() {
+    if (!document.body) return;
+    if (!document.getElementById("fmz-side-discord-style")) {
+      const style = document.createElement("style");
+      style.id = "fmz-side-discord-style";
+      style.textContent = `
+        #fmz-discord-tab{
+          position:fixed;left:0;top:42%;transform:translateY(-50%);z-index:9999;
+          background:#1f2937;color:#f9fafb;border:1px solid #4b5563;border-left:none;
+          border-radius:0 10px 10px 0;padding:8px 6px;text-decoration:none;
+          font-family:Arial,sans-serif;font-size:11px;font-weight:bold;
+          writing-mode:vertical-rl;text-orientation:mixed;
+          box-shadow:3px 4px 14px rgba(0,0,0,.5);
+          user-select:none;
+        }
+        #fmz-discord-tab:hover{background:#374151;color:#fff}
+      `;
+      document.head.appendChild(style);
+    }
+
+    if (!document.getElementById("fmz-discord-tab")) {
+      const tab = document.createElement("a");
+      tab.id = "fmz-discord-tab";
+      tab.href = SHORTCUT_LINKS.discordUrl;
+      tab.target = "_blank";
+      tab.rel = "noopener noreferrer";
+      tab.title = "Ouvrir Discord";
+      tab.textContent = "💬 Discord";
+      document.body.appendChild(tab);
+    }
+  }
+
   function injectGlobalBubbleStyles() {
     if (document.getElementById("fmz-global-bubble-style")) return;
     const style = document.createElement("style");
@@ -1545,14 +1581,15 @@
       }
       #fmz-gb-root.has-armee-badge{bottom:56px}
       #fmz-gb-root *{box-sizing:border-box}
-      .fmz-gb-dock{display:flex;align-items:center;gap:6px}
+      .fmz-gb-dock{display:flex;align-items:center;gap:6px;flex-wrap:wrap;justify-content:flex-end}
       .fmz-gb-fab{
-        display:flex;align-items:center;gap:6px;
+        display:inline-flex;align-items:center;gap:6px;text-decoration:none;
         background:#1f2937;color:#f9fafb;border:1px solid #4b5563;
-        border-radius:999px;padding:7px 12px;cursor:pointer;
+        border-radius:999px;padding:7px 11px;cursor:pointer;
         font-weight:bold;font-size:12px;box-shadow:0 6px 18px rgba(0,0,0,.5);
         user-select:none;
       }
+      .fmz-gb-fab:hover{background:#374151;color:#fff}
       .fmz-gb-fab.alert{
         background:#7f1d1d;border-color:#ef4444;color:#fff;
       }
@@ -1902,6 +1939,7 @@
 
   function renderGlobalBubble() {
     if (!document.body) return;
+    renderSideDiscordTab();
     injectGlobalBubbleStyles();
 
     let root = document.getElementById("fmz-gb-root");
@@ -2087,6 +2125,9 @@
     root.innerHTML = `
       ${cardHtml}
       <div class="fmz-gb-dock">
+        <a id="fmz-gb-site-fab" class="fmz-gb-fab" href="${esc(SHORTCUT_LINKS.siteUrl)}" target="_blank" rel="noopener noreferrer" title="Ouvrir le site applizzz">
+          <span>🌐 Site</span>
+        </a>
         <button id="fmz-gb-convoy-fab" class="fmz-gb-fab convoy ${isConvoyOpen ? "active" : ""}" type="button" title="Demandes et convois">
           <span>🚚 Convois</span>
           <span class="fmz-gb-pill">${openRequestsCount}</span>
