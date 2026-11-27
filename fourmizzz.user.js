@@ -6,6 +6,7 @@
 // @downloadURL  https://raw.githubusercontent.com/LDDLP/applizze-script/main/fourmizzz.user.js
 // @description  Outils d'alliance centralisés sur S5 : chasses en tête du Dôme avec TDC + chassé, attaques compactes avec filtres, TDC attaquant/cible, règle 50%-300% / 20% max et convois.
 // @match        *://s5.fourmizzz.fr/*
+// @run-at       document-end
 // @grant        GM_xmlhttpRequest
 // @grant        GM_getValue
 // @grant        GM_setValue
@@ -1780,6 +1781,7 @@
 
   function ensureArmeeIndicator() {
     if (!IS_ATTACK_PAGE && !IS_COMMERCE) return null;
+    if (!document.body) return null;
     if (!document.getElementById("fmz-armee-style")) {
       const style = document.createElement("style");
       style.id = "fmz-armee-style";
@@ -1798,7 +1800,7 @@
         }
         #fmz-armee-bubble.show{opacity:1;transform:translateY(0)}
       `;
-      document.head.appendChild(style);
+      (document.head || document.body).appendChild(style);
     }
 
     let wrap = document.getElementById("fmz-armee-badge-wrap");
@@ -1806,6 +1808,8 @@
       wrap = document.createElement("div");
       wrap.id = "fmz-armee-badge-wrap";
       wrap.innerHTML = `<div id="fmz-armee-bubble" role="status" aria-live="polite"></div>`;
+      document.body.appendChild(wrap);
+    } else if (!document.body.contains(wrap)) {
       document.body.appendChild(wrap);
     }
     return wrap;
@@ -2463,6 +2467,7 @@
   }
 
   function injectGlobalBubbleStyles() {
+    if (!document.body && !document.head) return;
     if (document.getElementById("fmz-global-bubble-style")) return;
     const style = document.createElement("style");
     style.id = "fmz-global-bubble-style";
@@ -2635,7 +2640,35 @@
         padding:7px 8px;margin-bottom:7px;font-size:11px;line-height:1.5;color:#cbd5e1;
       }
     `;
-    document.head.appendChild(style);
+    (document.head || document.body).appendChild(style);
+  }
+
+  function ensureContainersAttached() {
+    if (!document.body) return false;
+
+    let leftDock = document.getElementById("fmz-gb-left-dock");
+    if (!leftDock) {
+      leftDock = document.createElement("div");
+      leftDock.id = "fmz-gb-left-dock";
+      document.body.appendChild(leftDock);
+    } else if (!document.body.contains(leftDock)) {
+      document.body.appendChild(leftDock);
+    }
+
+    let root = document.getElementById("fmz-gb-root");
+    if (!root) {
+      root = document.createElement("div");
+      root.id = "fmz-gb-root";
+      document.body.appendChild(root);
+    } else if (!document.body.contains(root)) {
+      document.body.appendChild(root);
+    }
+
+    if (IS_ATTACK_PAGE || IS_COMMERCE) {
+      ensureArmeeIndicator();
+    }
+
+    return true;
   }
 
   function renderSectionBlock(key, title, count, bodyHtml, extraClass = "", collapsed = false) {
@@ -3344,8 +3377,8 @@
   }
 
   function renderGlobalBubble() {
-    if (!document.body) return;
     injectGlobalBubbleStyles();
+    if (!ensureContainersAttached()) return;
 
     const now = Date.now();
     const devUser = getDevUser();
@@ -3362,12 +3395,9 @@
     const isPlayersOpen = isPlayersBubbleOpen();
     const collapsedMap = getCollapsedSections();
 
-    let leftDock = document.getElementById("fmz-gb-left-dock");
-    if (!leftDock) {
-      leftDock = document.createElement("div");
-      leftDock.id = "fmz-gb-left-dock";
-      document.body.appendChild(leftDock);
-    }
+    const leftDock = document.getElementById("fmz-gb-left-dock");
+    const root = document.getElementById("fmz-gb-root");
+    if (!leftDock || !root) return;
 
     const updateBtnClass = `fmz-gb-fab update${updateAvailableInfo.available ? " needs-update" : ""}`;
     const updateBtnLabel = updateAvailableInfo.available
@@ -3392,12 +3422,6 @@
       </button>
     `;
 
-    let root = document.getElementById("fmz-gb-root");
-    if (!root) {
-      root = document.createElement("div");
-      root.id = "fmz-gb-root";
-      document.body.appendChild(root);
-    }
     root.classList.toggle("has-armee-badge", IS_ATTACK_PAGE || IS_COMMERCE);
 
     const hasImminentAttack = incomingAttacks.some((a) => (Number(a.arrivalAt || 0) - now) <= 30 * 60 * 1000);
@@ -3830,7 +3854,24 @@
     if (expired) runPageCycle();
   }
 
+  function observeBodyMutations() {
+    if (!document.body || document.body.dataset.fmzBodyObserver === "1") return;
+    document.body.dataset.fmzBodyObserver = "1";
+    const obs = new MutationObserver(() => {
+      if (
+        !document.getElementById("fmz-gb-left-dock") ||
+        !document.getElementById("fmz-gb-root") ||
+        ((IS_ATTACK_PAGE || IS_COMMERCE) && !document.getElementById("fmz-armee-badge-wrap"))
+      ) {
+        runPageCycle();
+      }
+    });
+    obs.observe(document.body, { childList: true, subtree: false });
+  }
+
   function runPageCycle() {
+    if (!ensureContainersAttached()) return;
+    observeBodyMutations();
     removeLegacyRessourcesPanel();
     if (isMembersPageView()) {
       scrapeAllianceMembersTdc();
@@ -3883,6 +3924,15 @@
       else renderGlobalBubble();
     });
   }, 15000);
+
+  document.addEventListener("submit", () => {
+    setTimeout(() => runPageCycle(), 150);
+    setTimeout(() => runPageCycle(), 600);
+  }, true);
+
+  window.addEventListener("pageshow", () => {
+    runPageCycle();
+  });
 
   window.addEventListener("storage", (e) => {
     if (
