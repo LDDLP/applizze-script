@@ -1,10 +1,10 @@
 // ==UserScript==
 // @name         Le Dôme De La Paix - Fourmizzz S5 (Ressources, Armee & Commerce)
 // @namespace    https://s5.fourmizzz.fr/
-// @version      0.5.26-worker
+// @version      0.5.33-worker
 // @updateURL    https://raw.githubusercontent.com/LDDLP/applizze-script/main/fourmizzz.user.js
 // @downloadURL  https://raw.githubusercontent.com/LDDLP/applizze-script/main/fourmizzz.user.js
-// @description  Outils d'alliance centralisés sur S5 : chasses, attaques entrantes avec TDC avant/après, convois et bulles flottantes globales avec relai Worker.
+// @description  Outils d'alliance centralisés sur S5 : chasses en tête du Dôme avec TDC + chassé, attaques compactes avec filtres et TDC attaquant/cible, statistiques sous MàJ script et convois.
 // @match        *://s5.fourmizzz.fr/*
 // @grant        GM_xmlhttpRequest
 // @grant        GM_getValue
@@ -29,7 +29,8 @@
   const SHORTCUT_LINKS = {
     discordUrl: "https://discord.com/app",
     siteUrl: "https://applizzz.pages.dev/",
-    membersUrl: "https://s5.fourmizzz.fr/alliance.php?Membres"
+    membersUrl: "https://s5.fourmizzz.fr/alliance.php?Membres",
+    scriptUpdateUrl: "https://raw.githubusercontent.com/LDDLP/applizze-script/main/fourmizzz.user.js"
   };
 
   const STORAGE_KEYS = {
@@ -43,10 +44,13 @@
     pendingCommerceFill: "fmz_pending_commerce_fill_v1",
     devUser: "fmz_local_dev_user_v1",
     allianceTdc: "fmz_alliance_tdc_v1",
+    allianceStats: "fmz_alliance_stats_v1",
     authToken: "fmz_local_auth_token_v1",
     workerPass: "fmz_local_worker_pass_v1",
     bubbleOpen: "fmz_global_bubble_open_v1",
     convoyBubbleOpen: "fmz_convoy_bubble_open_v1",
+    allianceBubbleOpen: "fmz_alliance_bubble_open_v1",
+    statsBubbleOpen: "fmz_stats_bubble_open_v1",
     bubbleSections: "fmz_global_bubble_sections_v1"
   };
 
@@ -72,6 +76,7 @@
   const RETRY_DELAY_MS = 60 * 1000;
   let lastSyncUpdatedAt = 0;
   let syncStatus = { state: "idle", label: "Prêt", at: 0 };
+  let allianceAttackFilter = "all";
 
   const DEFAULT_PLAYERS = [
     { name: "Peps", x: 80, y: 52, va: 0 },
@@ -146,21 +151,31 @@
     } catch (e) {}
   }
 
-  function storePlayerTdc(pseudo, tdcVal, source = "page") {
-    const cleanPseudo = String(pseudo || "").replace(/\s+/g, " ").trim();
-    const norm = normalizePseudo(cleanPseudo);
-    const num = parseFrInt(tdcVal) ?? Number(tdcVal);
-    if (!norm || !Number.isFinite(num) || num <= 0) return false;
+  function readAllianceStats() {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEYS.allianceStats);
+      const parsed = JSON.parse(raw || "null");
+      return parsed && typeof parsed === "object" ? parsed : null;
+    } catch (e) {
+      return null;
+    }
+  }
 
-    const map = readAllianceTdcMap();
-    map[norm] = {
-      pseudo: cleanPseudo,
-      tdc: Math.floor(num),
-      source,
-      updatedAt: Date.now()
+  function writeAllianceStats(statsObj) {
+    try {
+      if (statsObj && typeof statsObj === "object") {
+        localStorage.setItem(STORAGE_KEYS.allianceStats, JSON.stringify(statsObj));
+      }
+    } catch (e) {}
+  }
+
+  function ingestRemoteStats(rawStats) {
+    if (!rawStats || typeof rawStats !== "object") return;
+    const normalized = {
+      ...rawStats,
+      updatedAt: Number(rawStats.updatedAt) || Date.now()
     };
-    writeAllianceTdcMap(map);
-    return true;
+    writeAllianceStats(normalized);
   }
 
   function isMembersPageView() {
@@ -177,7 +192,7 @@
 
     const tables = Array.from(document.querySelectorAll("table"));
     for (const tbl of tables) {
-      if (tbl.closest && tbl.closest("#fmz-gb-root")) continue;
+      if (tbl.closest && (tbl.closest("#fmz-gb-root") || tbl.closest("#fmz-gb-left-dock"))) continue;
       const rows = Array.from(tbl.rows || []);
       if (rows.length < 2) continue;
 
@@ -206,7 +221,7 @@
           : "";
 
         const norm = normalizePseudo(rawPseudo);
-        const tdcVal = parseFrInt(rawTerrain);
+        const tdcVal = parseLeadingFrNumber(rawTerrain);
         if (!norm || !Number.isFinite(tdcVal) || tdcVal <= 0) continue;
 
         map[norm] = {
@@ -233,15 +248,16 @@
     let updated = false;
 
     for (const p of remotePlayers) {
-      if (!p) continue;
-      const name = p.name || p.pseudo || p.player || "";
+      if (!p || typeof p !== "object") continue;
+      const name = String(p.name || p.pseudo || p.player || "").trim();
+      if (!isCleanPlayerName(name)) continue;
       const norm = normalizePseudo(name);
       const rawTdc = p.tdc ?? p.terrain ?? p.area ?? 0;
-      const num = parseFrInt(rawTdc) ?? Number(rawTdc);
+      const num = parseLeadingFrNumber(rawTdc);
       if (!norm || !Number.isFinite(num) || num <= 0) continue;
       if (!map[norm] || map[norm].source !== "alliance_page") {
         map[norm] = {
-          pseudo: String(name).trim(),
+          pseudo: name,
           tdc: Math.floor(num),
           source: "worker",
           updatedAt: now
@@ -263,7 +279,84 @@
     if (entry && typeof entry.tdc === "number" && entry.tdc > 0) {
       return Math.floor(entry.tdc);
     }
+    const fallback = DEFAULT_PLAYERS.find((p) => normalizePseudo(p.name) === norm);
+    if (fallback && typeof fallback.tdc === "number" && fallback.tdc > 0) {
+      return Math.floor(fallback.tdc);
+    }
     return null;
+  }
+
+  function getHuntTdcSummary(huntItem) {
+    const playerPseudo = (huntItem && huntItem.player) || getDevUser();
+    const baseTdc = getPlayerTdc(playerPseudo) ?? getPlayerTdc(getDevUser());
+    if (!baseTdc || baseTdc <= 0) {
+      return { hasTdc: false, beforeTdc: null, afterTdc: null, gainedTdc: 0 };
+    }
+    const gainedTdc = Math.max(0, Number(huntItem && huntItem.area) || 0);
+    const afterTdc = baseTdc + gainedTdc;
+    return {
+      hasTdc: true,
+      beforeTdc: baseTdc,
+      afterTdc,
+      gainedTdc
+    };
+  }
+
+  function getAttackSentAnts(attackItem) {
+    if (!attackItem || typeof attackItem !== "object") return 0;
+    const direct = Number(attackItem.ants) || 0;
+    if (direct > 0) return Math.floor(direct);
+
+    if (Array.isArray(attackItem.troops) && attackItem.troops.length) {
+      const fromTroops = attackItem.troops.reduce(
+        (sum, t) => sum + (Number(t && t.quantity) || 0),
+        0
+      );
+      if (fromTroops > 0) return Math.floor(fromTroops);
+    }
+
+    const fallbackText = String(attackItem.rawText || attackItem.arrivalLabel || "");
+    const m = fallbackText.match(/([\d\s\u00a0.,]+)\s+fourmis?\b/i);
+    if (m) {
+      return Math.floor(parseFrInt(m[1]) || 0);
+    }
+    return 0;
+  }
+
+  function getAttackTdcSummary(attackItem) {
+    const targetPseudo = (attackItem && attackItem.target) || getDevUser();
+    const baseTdc = getPlayerTdc(targetPseudo) ?? getPlayerTdc(getDevUser());
+    if (!baseTdc || baseTdc <= 0) {
+      return { hasTdc: false, hasAnts: false, beforeTdc: null, afterTdc: null, sentAnts: 0 };
+    }
+    const sentAnts = Math.max(0, getAttackSentAnts(attackItem));
+    const hasAnts = sentAnts > 0;
+    const afterTdc = hasAnts ? Math.max(0, baseTdc - sentAnts) : baseTdc;
+    return {
+      hasTdc: true,
+      hasAnts,
+      beforeTdc: baseTdc,
+      afterTdc,
+      sentAnts
+    };
+  }
+
+  function getAttackerTdcSummary(attackItem) {
+    const attackerPseudo = attackItem && attackItem.attacker;
+    const baseTdc = getPlayerTdc(attackerPseudo);
+    if (!baseTdc || baseTdc <= 0) {
+      return { hasTdc: false, hasAnts: false, beforeTdc: null, afterTdc: null, sentAnts: 0 };
+    }
+    const sentAnts = Math.max(0, getAttackSentAnts(attackItem));
+    const hasAnts = sentAnts > 0;
+    const afterTdc = hasAnts ? baseTdc + sentAnts : baseTdc;
+    return {
+      hasTdc: true,
+      hasAnts,
+      beforeTdc: baseTdc,
+      afterTdc,
+      sentAnts
+    };
   }
 
   function resetAccountSession(newPseudo = "") {
@@ -296,7 +389,7 @@
   function setStoredPassword(pw) {
     const clean = String(pw || "");
     try {
-      if (typeof GM_setValue === "function") {
+      if (typeof GM_getValue === "function") {
         GM_setValue(STORAGE_KEYS.workerPass, clean);
         return;
       }
@@ -356,6 +449,34 @@
     } catch (e) {}
   }
 
+  function isAllianceBubbleOpen() {
+    try {
+      return localStorage.getItem(STORAGE_KEYS.allianceBubbleOpen) === "1";
+    } catch (e) {
+      return false;
+    }
+  }
+
+  function setAllianceBubbleOpen(open) {
+    try {
+      localStorage.setItem(STORAGE_KEYS.allianceBubbleOpen, open ? "1" : "0");
+    } catch (e) {}
+  }
+
+  function isStatsBubbleOpen() {
+    try {
+      return localStorage.getItem(STORAGE_KEYS.statsBubbleOpen) === "1";
+    } catch (e) {
+      return false;
+    }
+  }
+
+  function setStatsBubbleOpen(open) {
+    try {
+      localStorage.setItem(STORAGE_KEYS.statsBubbleOpen, open ? "1" : "0");
+    } catch (e) {}
+  }
+
   function getCollapsedSections() {
     try {
       const raw = localStorage.getItem(STORAGE_KEYS.bubbleSections);
@@ -388,6 +509,16 @@
     return !!x && x === y;
   }
 
+  function isCleanPlayerName(raw) {
+    const s = String(raw || "").trim();
+    if (!s || s.length > 28) return false;
+    if (/\b(?:rang|pseudo|terrain|technologie|fourmili[eè]re|chef|gardien|diplomate|recrue)\b/i.test(s)) {
+      return false;
+    }
+    if (s.split(/\s+/).length > 2) return false;
+    return true;
+  }
+
   function esc(s) {
     return String(s ?? "").replace(/[&<>"']/g, (c) => ({
       "&": "&amp;",
@@ -416,6 +547,17 @@
     if (!/^\d+$/.test(cleaned)) return null;
     const n = Number(cleaned);
     return Number.isSafeInteger(n) ? n : null;
+  }
+
+  function parseLeadingFrNumber(raw) {
+    if (typeof raw === "number") {
+      return Number.isFinite(raw) ? raw : null;
+    }
+    const s = String(raw || "").trim();
+    if (!s) return null;
+    const m = s.match(/\d{1,3}(?:[\s\u00a0]\d{3})+|\d+/);
+    if (!m) return null;
+    return parseFrInt(m[0]);
   }
 
   function parseRemainingSeconds(text) {
@@ -816,14 +958,13 @@
       return false;
     }
 
-    const sinceParam = !force && lastSyncUpdatedAt ? `?since=${encodeURIComponent(lastSyncUpdatedAt)}` : "";
-    let res = await httpJsonRequest("GET", `${baseUrl}/api/sync${sinceParam}`, undefined, token);
+    let res = await httpJsonRequest("GET", `${baseUrl}/api/sync`, undefined, token);
 
     if (!res.ok && res.status === 401) {
       setStoredToken("");
       token = await ensureWorkerToken(baseUrl, true);
       if (token) {
-        res = await httpJsonRequest("GET", `${baseUrl}/api/sync${sinceParam}`, undefined, token);
+        res = await httpJsonRequest("GET", `${baseUrl}/api/sync`, undefined, token);
       }
     }
 
@@ -835,7 +976,6 @@
 
     setSyncState("ok", "Synchro OK");
     const data = res.data || {};
-    if (data.unchanged) return false;
 
     if (typeof data.updatedAt === "number") {
       lastSyncUpdatedAt = data.updatedAt;
@@ -845,6 +985,15 @@
       ingestRemotePlayersTdc(data.players);
     } else if (data.state && Array.isArray(data.state.players)) {
       ingestRemotePlayersTdc(data.state.players);
+    }
+
+    const rawStats =
+      data.stats ||
+      data.statistics ||
+      (data.state && (data.state.stats || data.state.statistics)) ||
+      null;
+    if (rawStats && typeof rawStats === "object") {
+      ingestRemoteStats(rawStats);
     }
 
     const allMovements = Array.isArray(data.movements) ? data.movements : [];
@@ -862,6 +1011,7 @@
 
     return true;
   }
+
   function extractHuntsFromPage() {
     const now = Date.now();
     const playerName = getDevUser();
@@ -893,7 +1043,7 @@
       if (remSec === null || remSec <= 0) return;
 
       const areaMatch = head.match(/conqu[eé]rir\s+([\d\s\u00a0.,]+)\s*cm(?:²|2)/i);
-      const area = areaMatch ? parseFrInt(areaMatch[1]) : null;
+      const area = areaMatch ? parseLeadingFrNumber(areaMatch[1]) : null;
       const arrivalMatch = blk.join(" ").match(/arriv[ée]e?\s+((?:demain\s+)?à\s+\d{1,2}h\d{2})/i);
       const arrivalLabel = arrivalMatch ? arrivalMatch[1] : "";
 
@@ -993,19 +1143,17 @@
       .sort((a, b) => Number(a.arrivalAt || 0) - Number(b.arrivalAt || 0));
   }
 
-  function getAttackTdcSummary(attackItem) {
-    const targetPseudo = (attackItem && attackItem.target) || getDevUser();
-    const baseTdc = getPlayerTdc(targetPseudo) ?? getPlayerTdc(getDevUser());
-    if (!baseTdc || baseTdc <= 0) {
-      return { hasTdc: false, beforeTdc: null, afterTdc: null };
-    }
-    const huntArea = Number(attackItem && attackItem.area) || 0;
-    const afterTdc = huntArea > 0 ? Math.max(0, baseTdc - huntArea) : baseTdc;
-    return {
-      hasTdc: true,
-      beforeTdc: baseTdc,
-      afterTdc
-    };
+  function getAllAllianceAttacks(now = Date.now()) {
+    const seen = new Set();
+    return readJsonArray(STORAGE_KEYS.attacks)
+      .filter((a) => {
+        if (!a || Number(a.arrivalAt || 0) <= now) return false;
+        const k = String(a.sig || a.id);
+        if (seen.has(k)) return false;
+        seen.add(k);
+        return true;
+      })
+      .sort((a, b) => Number(a.arrivalAt || 0) - Number(b.arrivalAt || 0));
   }
 
   function getAllActiveHunts(now = Date.now()) {
@@ -1088,7 +1236,7 @@
       style.id = "fmz-armee-style";
       style.textContent = `
         #fmz-armee-badge-wrap{
-          position:fixed;right:12px;bottom:14px;z-index:9998;
+          position:fixed;right:12px;bottom:58px;z-index:10001;
           display:flex;align-items:center;gap:8px;
           font-family:Arial,sans-serif;pointer-events:none;
         }
@@ -1188,7 +1336,13 @@
 
       const troopLine = blk.find((l) => /troupes\s+en\s+attaques?\s*:/i.test(l)) || "";
       const troops = parseTroopsList(troopLine);
-      const totalAnts = troops.reduce((sum, t) => sum + (Number(t.quantity) || 0), 0);
+      let totalAnts = troops.reduce((sum, t) => sum + (Number(t.quantity) || 0), 0);
+      if (totalAnts <= 0) {
+        const antMatch = blk.join(" ").match(/([\d\s\u00a0.,]+)\s+fourmis?\b/i);
+        if (antMatch) {
+          totalAnts = parseFrInt(antMatch[1]) || 0;
+        }
+      }
 
       const arrivalLine = blk.find((l) => /arriv[ée]e?\s+(?:demain\s+)?à\s+/i.test(l)) || "";
       const arrivalMatch = arrivalLine.match(/arriv[ée]e?\s+((?:demain\s+)?à\s+\d{1,2}h\d{2})/i);
@@ -1217,6 +1371,7 @@
         troops,
         ants: totalAnts,
         arrivalLabel,
+        rawText: blk.join(" "),
         detectedAt: now,
         arrivalAt,
         active: true
@@ -1257,6 +1412,7 @@
           troops: item.troops.length ? item.troops : prev.troops,
           ants: item.ants || prev.ants,
           arrivalLabel: item.arrivalLabel || prev.arrivalLabel,
+          rawText: item.rawText || prev.rawText || "",
           arrivalAt: diff < 30000 ? prev.arrivalAt : item.arrivalAt,
           active: true
         });
@@ -1390,9 +1546,28 @@
           .map((a) => {
             const leftSec = Math.max(0, Math.ceil((a.arrivalAt - now) / 1000));
             const tdcInfo = getAttackTdcSummary(a);
-            const tdcLine = tdcInfo.hasTdc
-              ? `<div class="fmz-muted">📐 TDC avant : <b>${formatNumber(tdcInfo.beforeTdc)} cm²</b> · TDC après : <b>${formatNumber(tdcInfo.afterTdc)} cm²</b></div>`
-              : `<div class="fmz-muted">📐 TDC avant / après : <a class="fmz-gb-link" href="${esc(SHORTCUT_LINKS.membersUrl)}">Lire page Membres</a></div>`;
+            const atkInfo = getAttackerTdcSummary(a);
+            const tdcParts = [];
+            if (tdcInfo.hasTdc) {
+              tdcParts.push(
+                tdcInfo.hasAnts
+                  ? `Cible : <b>${formatNumber(tdcInfo.beforeTdc)} → ${formatNumber(tdcInfo.afterTdc)} cm²</b>`
+                  : `Cible : <b>${formatNumber(tdcInfo.beforeTdc)} cm²</b>`
+              );
+            }
+            if (atkInfo.hasTdc) {
+              tdcParts.push(
+                atkInfo.hasAnts
+                  ? `${esc(a.attacker || "Attaquant")} : <b>${formatNumber(atkInfo.beforeTdc)} → ${formatNumber(atkInfo.afterTdc)} cm²</b>`
+                  : `${esc(a.attacker || "Attaquant")} : <b>${formatNumber(atkInfo.beforeTdc)} cm²</b>`
+              );
+            }
+            const antsPart = getAttackSentAnts(a) > 0
+              ? ` · 🐜 ${formatNumber(getAttackSentAnts(a))}`
+              : " · 🐜 effectif inconnu";
+            const tdcLine = tdcParts.length
+              ? `<div class="fmz-muted">📐 ${tdcParts.join(" · ")}${antsPart}</div>`
+              : `<div class="fmz-muted">📐 TDC : <a class="fmz-gb-link" href="${esc(SHORTCUT_LINKS.membersUrl)}">Lire page Membres</a>${antsPart}</div>`;
             return `
               <div class="fmz-item">
                 <div class="fmz-item-top">
@@ -1424,6 +1599,7 @@
       : "";
     benchEl.innerHTML = `⏱️ <b>Repères de durée de chasse :</b> ${benchText}${histText}`;
   }
+
   function findPlayerByPseudo(name) {
     const n = normalizePseudo(name);
     return DEFAULT_PLAYERS.find((p) => normalizePseudo(p.name) === n) || null;
@@ -1498,7 +1674,7 @@
     if (!IS_COMMERCE) return { filledCount: 0, totalVisibleFields: 0 };
 
     const isVisibleField = (el) => {
-      if (!el || (el.closest && el.closest("#fmz-gb-root"))) return false;
+      if (!el || (el.closest && (el.closest("#fmz-gb-root") || el.closest("#fmz-gb-left-dock")))) return false;
       const type = String(el.type || "").toLowerCase();
       if (["hidden", "submit", "button", "checkbox", "radio", "reset", "file", "image"].includes(type)) {
         return false;
@@ -1716,13 +1892,18 @@
     const style = document.createElement("style");
     style.id = "fmz-global-bubble-style";
     style.textContent = `
+      #fmz-gb-left-dock{
+        position:fixed;left:12px;bottom:14px;z-index:10000;
+        display:flex;flex-direction:column;align-items:flex-start;gap:6px;
+        font-family:Arial,sans-serif;font-size:12px;color:#f3f4f6;
+      }
       #fmz-gb-root{
         position:fixed;right:12px;bottom:14px;z-index:10000;
         display:flex;flex-direction:column;align-items:flex-end;gap:8px;
         font-family:Arial,sans-serif;font-size:12px;color:#f3f4f6;
       }
-      #fmz-gb-root.has-armee-badge{bottom:56px}
-      #fmz-gb-root *{box-sizing:border-box}
+      #fmz-gb-root.has-armee-badge #fmz-gb-card{margin-bottom:44px}
+      #fmz-gb-root *, #fmz-gb-left-dock *{box-sizing:border-box}
       .fmz-gb-dock{display:flex;align-items:center;gap:6px;flex-wrap:wrap;justify-content:flex-end}
       .fmz-gb-fab{
         display:inline-flex;align-items:center;gap:6px;text-decoration:none;
@@ -1735,9 +1916,13 @@
       .fmz-gb-fab.alert{
         background:#7f1d1d;border-color:#ef4444;color:#fff;
       }
-      .fmz-gb-fab.convoy.active{
+      .fmz-gb-fab.convoy.active, .fmz-gb-fab.alliance.active, .fmz-gb-fab.stats.active{
         background:#1e3a8a;border-color:#60a5fa;color:#fff;
       }
+      .fmz-gb-fab.update{
+        background:#14532d;border-color:#22c55e;color:#dcfce7;
+      }
+      .fmz-gb-fab.update:hover{background:#166534;color:#fff}
       .fmz-gb-pill{
         background:#111827;border:1px solid #4b5563;border-radius:999px;
         padding:1px 6px;font-size:11px;color:#93c5fd;
@@ -1747,7 +1932,7 @@
       }
       #fmz-gb-card, .fmz-gb-card{
         width:min(368px, calc(100vw - 24px));
-        max-height:calc(100vh - 110px);
+        max-height:calc(100vh - 125px);
         overflow-y:auto;
         background:#1f2937 !important;
         color:#f3f4f6 !important;
@@ -1772,6 +1957,17 @@
       }
       .fmz-gb-btn.accent{
         background:#1e3a8a !important;border-color:#3b82f6;color:#fff !important;
+      }
+      .fmz-gb-filters{
+        display:flex;gap:4px;margin-bottom:8px;
+      }
+      .fmz-gb-filter-btn{
+        flex:1;background:#111827 !important;color:#cbd5e1 !important;
+        border:1px solid #374151;border-radius:6px;padding:4px 6px;
+        cursor:pointer;font-size:11px;font-weight:bold;text-align:center;
+      }
+      .fmz-gb-filter-btn.active{
+        background:#1e3a8a !important;color:#fff !important;border-color:#60a5fa;
       }
       .fmz-gb-status-bar{
         display:flex;justify-content:space-between;align-items:center;gap:6px;
@@ -1804,14 +2000,16 @@
       }
       .fmz-gb-sec-body{margin-top:5px}
       .fmz-gb-sec.collapsed .fmz-gb-sec-body{display:none}
-      .fmz-gb-row{padding:5px 0;border-top:1px solid #1f2937;line-height:1.35}
-      .fmz-gb-row.soon{background:rgba(239,68,68,.12);padding:5px 6px;border-radius:5px}
-      .fmz-gb-row:first-of-type{border-top:none;padding-top:1px}
+      .fmz-gb-row{padding:6px 4px;border-top:1px solid #1f2937;line-height:1.3}
+      .fmz-gb-row.soon{background:rgba(239,68,68,.12);padding:6px 6px;border-radius:6px}
+      .fmz-gb-row.targeted-me{border-left:2px solid #f87171;padding-left:6px}
+      .fmz-gb-row:first-of-type{border-top:none;padding-top:2px}
       .fmz-gb-row-top{display:flex;justify-content:space-between;align-items:center;gap:6px}
       .fmz-gb-cd{white-space:nowrap;font-weight:bold;font-size:11px;color:#93c5fd}
       .fmz-gb-cd.critical{color:#fca5a5;background:#7f1d1d;padding:1px 5px;border-radius:4px}
       .fmz-gb-cd.warn{color:#fde68a}
-      .fmz-gb-sub{color:#9ca3af;font-size:11px;margin-top:2px}
+      .fmz-gb-sub{color:#9ca3af;font-size:11px;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+      .fmz-gb-tdc{color:#cbd5e1;font-size:11px;margin-top:2px}
       .fmz-gb-empty{color:#9ca3af;font-size:11px}
       .fmz-gb-grid2{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:5px}
       .fmz-gb-lbl{display:block;color:#9ca3af;font-size:11px;margin-top:5px}
@@ -1836,6 +2034,253 @@
           <span>${count}</span>
         </div>
         <div class="fmz-gb-sec-body">${bodyHtml}</div>
+      </div>
+    `;
+  }
+
+  function sanitizeRankingItems(rawList, fallbackPlayers) {
+    const cleaned = [];
+    const seen = new Set();
+
+    if (Array.isArray(rawList)) {
+      for (const item of rawList) {
+        if (!item || typeof item !== "object") continue;
+        const pName = String(item.name || item.pseudo || item.player || "").trim();
+        if (!isCleanPlayerName(pName)) continue;
+        const pVal = item.tdc ?? item.terrain ?? item.value ?? item.score ?? 0;
+        const numVal = parseLeadingFrNumber(pVal);
+        if (numVal !== null && numVal > 0) {
+          const key = normalizePseudo(pName);
+          if (!seen.has(key)) {
+            seen.add(key);
+            cleaned.push({ name: pName, tdc: Math.floor(numVal) });
+          }
+        }
+      }
+    }
+
+    if (cleaned.length > 0) {
+      return cleaned.sort((a, b) => b.tdc - a.tdc).slice(0, 10);
+    }
+
+    return (fallbackPlayers || []).slice(0, 10);
+  }
+
+  function buildStatsBubbleHtml(devUser, now, collapsedMap) {
+    const stats = readAllianceStats();
+    const tdcMap = readAllianceTdcMap();
+    const playersFromMap = Object.entries(tdcMap)
+      .filter(
+        ([k, v]) =>
+          k &&
+          !k.startsWith("_") &&
+          v &&
+          typeof v.tdc === "number" &&
+          v.tdc > 0 &&
+          isCleanPlayerName(v.pseudo)
+      )
+      .map(([, v]) => ({ name: v.pseudo, tdc: Math.floor(v.tdc) }))
+      .sort((a, b) => b.tdc - a.tdc);
+
+    const totalTdcFromMap = playersFromMap.reduce((sum, p) => sum + p.tdc, 0);
+    const avgTdcFromMap = playersFromMap.length ? Math.round(totalTdcFromMap / playersFromMap.length) : 0;
+
+    const totalTdc = stats && (stats.totalTdc ?? stats.tdcTotal ?? stats.total_tdc) !== undefined
+      ? parseLeadingFrNumber(stats.totalTdc ?? stats.tdcTotal ?? stats.total_tdc) || totalTdcFromMap
+      : totalTdcFromMap;
+    const avgTdc = stats && (stats.avgTdc ?? stats.tdcAvg ?? stats.averageTdc) !== undefined
+      ? parseLeadingFrNumber(stats.avgTdc ?? stats.tdcAvg ?? stats.averageTdc) || avgTdcFromMap
+      : avgTdcFromMap;
+    const memberCount = stats && (stats.memberCount ?? stats.playersCount ?? stats.count) !== undefined
+      ? parseLeadingFrNumber(stats.memberCount ?? stats.playersCount ?? stats.count) || playersFromMap.length
+      : playersFromMap.length;
+
+    const overviewRows = [];
+    if (memberCount > 0) {
+      overviewRows.push(`<div class="fmz-gb-row"><div class="fmz-gb-row-top"><span>👥 Membres suivis</span><b>${formatNumber(memberCount)}</b></div></div>`);
+    }
+    if (totalTdc > 0) {
+      overviewRows.push(`<div class="fmz-gb-row"><div class="fmz-gb-row-top"><span>📐 TDC total alliance</span><b>${formatNumber(totalTdc)} cm²</b></div></div>`);
+    }
+    if (avgTdc > 0) {
+      overviewRows.push(`<div class="fmz-gb-row"><div class="fmz-gb-row-top"><span>📊 TDC moyen</span><b>${formatNumber(avgTdc)} cm²</b></div></div>`);
+    }
+
+    const extraEntries = stats && typeof stats === "object"
+      ? Object.entries(stats).filter(
+          ([k, v]) =>
+            !["updatedAt", "totalTdc", "tdcTotal", "total_tdc", "avgTdc", "tdcAvg", "averageTdc", "memberCount", "playersCount", "count", "topPlayers", "ranking", "items"].includes(k) &&
+            v !== null &&
+            v !== undefined &&
+            typeof v !== "object" &&
+            isCleanPlayerName(k)
+        )
+      : [];
+
+    extraEntries.forEach(([k, v]) => {
+      const valDisplay = typeof v === "number" ? formatNumber(v) : String(v);
+      overviewRows.push(`<div class="fmz-gb-row"><div class="fmz-gb-row-top"><span>${esc(k)}</span><b>${esc(valDisplay)}</b></div></div>`);
+    });
+
+    const overviewHtml = overviewRows.length
+      ? overviewRows.join("")
+      : `<div class="fmz-gb-empty">Aucune statistique reçue du site dev pour l'instant.</div>`;
+
+    const rawRanking =
+      (stats && Array.isArray(stats.topPlayers) && stats.topPlayers) ||
+      (stats && Array.isArray(stats.ranking) && stats.ranking) ||
+      (stats && Array.isArray(stats.items) && stats.items) ||
+      [];
+
+    const rankingList = sanitizeRankingItems(rawRanking, playersFromMap);
+
+    const rankingHtml = !rankingList.length
+      ? `<div class="fmz-gb-empty">Aucun classement disponible (ouvre la page Membres pour scanner les TDC).</div>`
+      : rankingList
+          .map((item, idx) => `
+            <div class="fmz-gb-row">
+              <div class="fmz-gb-row-top">
+                <span><b>${idx + 1}. ${esc(item.name)}</b></span>
+                <span class="fmz-gb-cd">${formatNumber(item.tdc)} cm²</span>
+              </div>
+            </div>
+          `)
+          .join("");
+
+    return `
+      <div id="fmz-gb-card">
+        <div class="fmz-gb-head">
+          <b>📊 Statistiques · ${esc(devUser)}</b>
+          <div class="fmz-gb-head-actions">
+            <button id="fmz-gb-refresh" class="fmz-gb-btn" type="button" title="Rafraîchir maintenant">🔄</button>
+            <button id="fmz-gb-st-close" class="fmz-gb-btn" type="button" title="Réduire">_</button>
+          </div>
+        </div>
+
+        <div class="fmz-gb-status-bar">
+          <span>${esc(syncStatus.label)}</span>
+          <a class="fmz-gb-link" href="${esc(SHORTCUT_LINKS.siteUrl)}" target="_blank" rel="noopener noreferrer">Site dev (Statistiques)</a>
+        </div>
+
+        ${renderSectionBlock(
+          "st_overview",
+          "📈 Synthèse alliance",
+          overviewRows.length,
+          overviewHtml,
+          "in",
+          !!collapsedMap.st_overview
+        )}
+
+        ${renderSectionBlock(
+          "st_ranking",
+          "🏆 Classement TDC",
+          rankingList.length,
+          rankingHtml,
+          "out",
+          !!collapsedMap.st_ranking
+        )}
+      </div>
+    `;
+  }
+
+  function buildAllianceBubbleHtml(devUser, now, collapsedMap) {
+    const rawAttacks = getAllAllianceAttacks(now);
+    const incomingCount = rawAttacks.filter((a) => samePseudo(a.target, devUser)).length;
+    const outgoingCount = rawAttacks.filter((a) => samePseudo(a.attacker, devUser)).length;
+    const filteredAttacks = rawAttacks.filter((a) => {
+      if (allianceAttackFilter === "incoming") return samePseudo(a.target, devUser);
+      if (allianceAttackFilter === "outgoing") return samePseudo(a.attacker, devUser);
+      return true; // Tout = attaques des autres + sur moi + mes attaques
+    });
+
+    const hasUrgent = filteredAttacks.some((a) => (Number(a.arrivalAt || 0) - now) <= 30 * 60 * 1000);
+
+    const attacksListHtml = !filteredAttacks.length
+      ? `<div class="fmz-gb-empty">Aucune attaque correspondant à ce filtre.</div>`
+      : filteredAttacks
+          .map((a) => {
+            const leftSec = Math.max(0, Math.ceil((Number(a.arrivalAt || 0) - now) / 1000));
+            const isCritical = leftSec <= 15 * 60;
+            const isWarn = leftSec <= 30 * 60;
+            const urgencyClass = isCritical ? "critical" : isWarn ? "warn" : "";
+            const isMeTarget = samePseudo(a.target, devUser);
+            const targetBadge = isMeTarget
+              ? `<span style="color:#fca5a5;font-weight:bold">${esc(a.target || "?")} (moi)</span>`
+              : `<b>${esc(a.target || "?")}</b>`;
+
+            const sentAnts = getAttackSentAnts(a);
+            const metaParts = [];
+            const arrivalTxt = a.arrivalLabel
+              ? esc(a.arrivalLabel)
+              : new Date(Number(a.arrivalAt || now)).toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" });
+            metaParts.push(`🕒 ${arrivalTxt}`);
+            if (a.targetKind) metaParts.push(esc(a.targetKind));
+            metaParts.push(sentAnts > 0 ? `🐜 ${formatNumber(sentAnts)}` : `🐜 effectif inconnu`);
+
+            const atkTdc = getAttackerTdcSummary(a);
+            const defTdc = getAttackTdcSummary(a);
+            const tdcParts = [];
+            if (atkTdc.hasTdc) {
+              tdcParts.push(
+                atkTdc.hasAnts
+                  ? `${esc(a.attacker || "Attaquant")} ${formatNumber(atkTdc.beforeTdc)}→${formatNumber(atkTdc.afterTdc)}`
+                  : `${esc(a.attacker || "Attaquant")} ${formatNumber(atkTdc.beforeTdc)}`
+              );
+            }
+            if (defTdc.hasTdc) {
+              const defLabel = isMeTarget ? "Moi" : esc(a.target || "Cible");
+              tdcParts.push(
+                defTdc.hasAnts
+                  ? `${defLabel} ${formatNumber(defTdc.beforeTdc)}→${formatNumber(defTdc.afterTdc)}`
+                  : `${defLabel} ${formatNumber(defTdc.beforeTdc)}`
+              );
+            }
+            const tdcSub = tdcParts.length
+              ? `<div class="fmz-gb-tdc">📐 ${tdcParts.join(" · ")} cm²</div>`
+              : "";
+
+            return `
+              <div class="fmz-gb-row ${isWarn ? "soon" : ""} ${isMeTarget ? "targeted-me" : ""}">
+                <div class="fmz-gb-row-top">
+                  <span>${isCritical ? "🚨" : "⚔️"} <b>${esc(a.attacker || "Inconnu")}</b> → ${targetBadge}</span>
+                  <span class="fmz-gb-cd ${urgencyClass}" data-cd="${a.arrivalAt}">${formatDuration(leftSec)}</span>
+                </div>
+                <div class="fmz-gb-sub">${metaParts.join(" · ")}</div>
+                ${tdcSub}
+              </div>
+            `;
+          })
+          .join("");
+
+    return `
+      <div id="fmz-gb-card">
+        <div class="fmz-gb-head">
+          <b>🛡️ Alliance · Attaques en cours</b>
+          <div class="fmz-gb-head-actions">
+            <button id="fmz-gb-refresh" class="fmz-gb-btn" type="button" title="Rafraîchir maintenant">🔄</button>
+            <button id="fmz-gb-al-close" class="fmz-gb-btn" type="button" title="Réduire">_</button>
+          </div>
+        </div>
+
+        <div class="fmz-gb-status-bar">
+          <span>${esc(syncStatus.label)}</span>
+          <a class="fmz-gb-link" href="${esc(SHORTCUT_LINKS.membersUrl)}">📋 Membres (TDC)</a>
+        </div>
+
+        <div class="fmz-gb-filters">
+          <button class="fmz-gb-filter-btn ${allianceAttackFilter === "all" ? "active" : ""}" data-al-filter="all" type="button">Tout (${rawAttacks.length})</button>
+          <button class="fmz-gb-filter-btn ${allianceAttackFilter === "incoming" ? "active" : ""}" data-al-filter="incoming" type="button">Sur moi (${incomingCount})</button>
+          <button class="fmz-gb-filter-btn ${allianceAttackFilter === "outgoing" ? "active" : ""}" data-al-filter="outgoing" type="button">Mes attaques (${outgoingCount})</button>
+        </div>
+
+        ${renderSectionBlock(
+          "al_attacks",
+          "⚔️ Attaques suivies",
+          filteredAttacks.length,
+          attacksListHtml,
+          `danger ${hasUrgent ? "urgent" : ""}`,
+          !!collapsedMap.al_attacks
+        )}
       </div>
     `;
   }
@@ -2083,6 +2528,41 @@
     if (!document.body) return;
     injectGlobalBubbleStyles();
 
+    const now = Date.now();
+    const devUser = getDevUser();
+    const incomingAttacks = getIncomingAttacksForCurrentUser();
+    const allAllianceAttacks = getAllAllianceAttacks(now);
+    const convoys = getConvoySummaryForUser(devUser, now);
+    const allHunts = getAllActiveHunts(now);
+    const openRequestsCount = convoyRequests.filter((r) => r.status !== "done").length;
+    const isDomeOpen = isGlobalBubbleOpen();
+    const isConvoyOpen = isConvoyBubbleOpen();
+    const isAllianceOpen = isAllianceBubbleOpen();
+    const isStatsOpen = isStatsBubbleOpen();
+    const collapsedMap = getCollapsedSections();
+
+    let leftDock = document.getElementById("fmz-gb-left-dock");
+    if (!leftDock) {
+      leftDock = document.createElement("div");
+      leftDock.id = "fmz-gb-left-dock";
+      document.body.appendChild(leftDock);
+    }
+
+    leftDock.innerHTML = `
+      <a id="fmz-gb-discord-fab" class="fmz-gb-fab" href="${esc(SHORTCUT_LINKS.discordUrl)}" target="_blank" rel="noopener noreferrer" title="Ouvrir Discord">
+        <span>💬 Discord</span>
+      </a>
+      <a id="fmz-gb-site-fab" class="fmz-gb-fab" href="${esc(SHORTCUT_LINKS.siteUrl)}" target="_blank" rel="noopener noreferrer" title="Ouvrir le site applizzz">
+        <span>🌐 Site</span>
+      </a>
+      <a id="fmz-gb-update-fab" class="fmz-gb-fab update" href="${esc(SHORTCUT_LINKS.scriptUpdateUrl)}" target="_blank" rel="noopener noreferrer" title="Mettre à jour le script depuis GitHub">
+        <span>⬆️ MàJ script</span>
+      </a>
+      <button id="fmz-gb-stats-fab" class="fmz-gb-fab stats ${isStatsOpen ? "active" : ""}" type="button" title="Statistiques de l'alliance">
+        <span>📊 Statistiques</span>
+      </button>
+    `;
+
     let root = document.getElementById("fmz-gb-root");
     if (!root) {
       root = document.createElement("div");
@@ -2090,16 +2570,6 @@
       document.body.appendChild(root);
     }
     root.classList.toggle("has-armee-badge", IS_ATTACK_PAGE);
-
-    const now = Date.now();
-    const devUser = getDevUser();
-    const incomingAttacks = getIncomingAttacksForCurrentUser();
-    const convoys = getConvoySummaryForUser(devUser, now);
-    const allHunts = getAllActiveHunts(now);
-    const openRequestsCount = convoyRequests.filter((r) => r.status !== "done").length;
-    const isDomeOpen = isGlobalBubbleOpen();
-    const isConvoyOpen = isConvoyBubbleOpen();
-    const collapsedMap = getCollapsedSections();
 
     const hasImminentAttack = incomingAttacks.some((a) => (Number(a.arrivalAt || 0) - now) <= 30 * 60 * 1000);
     const totalEvents =
@@ -2114,9 +2584,35 @@
 
     let cardHtml = "";
 
-    if (isConvoyOpen) {
+    if (isStatsOpen) {
+      cardHtml = buildStatsBubbleHtml(devUser, now, collapsedMap);
+    } else if (isAllianceOpen) {
+      cardHtml = buildAllianceBubbleHtml(devUser, now, collapsedMap);
+    } else if (isConvoyOpen) {
       cardHtml = buildConvoyBubbleHtml(devUser, now, collapsedMap);
     } else if (isDomeOpen) {
+      const huntsHtml = !allHunts.length
+        ? `<div class="fmz-gb-empty">Aucune chasse en cours dans l'alliance.</div>`
+        : allHunts
+            .map((h) => {
+              const leftSec = Math.max(0, Math.ceil((h.arrivalAt - now) / 1000));
+              const tdcInfo = getHuntTdcSummary(h);
+              const areaLabel = h.area ? ` · +${formatNumber(h.area)} cm²` : "";
+              const tdcSub = tdcInfo.hasTdc
+                ? `TDC actuel : <b>${formatNumber(tdcInfo.beforeTdc)}</b> · TDC après chasse : <b>${formatNumber(tdcInfo.afterTdc)}</b>`
+                : `TDC actuel / après : <a class="fmz-gb-link" href="${esc(SHORTCUT_LINKS.membersUrl)}">Lire page Membres</a>`;
+              return `
+                <div class="fmz-gb-row">
+                  <div class="fmz-gb-row-top">
+                    <span><b>${esc(h.player || "Joueur")}</b>${areaLabel}</span>
+                    <span class="fmz-gb-cd" data-cd="${h.arrivalAt}">${formatDuration(leftSec)}</span>
+                  </div>
+                  <div class="fmz-gb-tdc">${tdcSub}</div>
+                </div>
+              `;
+            })
+            .join("");
+
       const attacksHtml = !incomingAttacks.length
         ? `<div class="fmz-gb-empty">Aucune attaque en cours sur moi.</div>`
         : incomingAttacks
@@ -2126,16 +2622,36 @@
               const isWarn = leftSec <= 30 * 60;
               const urgencyClass = isCritical ? "critical" : isWarn ? "warn" : "";
               const tdcInfo = getAttackTdcSummary(a);
-              const tdcSub = tdcInfo.hasTdc
-                ? `TDC avant : <b>${formatNumber(tdcInfo.beforeTdc)}</b> · après : <b>${formatNumber(tdcInfo.afterTdc)}</b>`
-                : `TDC avant / après : <a class="fmz-gb-link" href="${esc(SHORTCUT_LINKS.membersUrl)}">Lire page Membres</a>`;
+              const atkTdc = getAttackerTdcSummary(a);
+              const sentAnts = getAttackSentAnts(a);
+              const tdcParts = [];
+              if (tdcInfo.hasTdc) {
+                tdcParts.push(
+                  tdcInfo.hasAnts
+                    ? `Moi <b>${formatNumber(tdcInfo.beforeTdc)}→${formatNumber(tdcInfo.afterTdc)}</b>`
+                    : `Moi <b>${formatNumber(tdcInfo.beforeTdc)}</b>`
+                );
+              }
+              if (atkTdc.hasTdc) {
+                tdcParts.push(
+                  atkTdc.hasAnts
+                    ? `${esc(a.attacker || "Attaquant")} <b>${formatNumber(atkTdc.beforeTdc)}→${formatNumber(atkTdc.afterTdc)}</b>`
+                    : `${esc(a.attacker || "Attaquant")} <b>${formatNumber(atkTdc.beforeTdc)}</b>`
+                );
+              }
+              const antsPart = sentAnts > 0
+                ? ` · 🐜 ${formatNumber(sentAnts)}`
+                : ` · 🐜 effectif inconnu`;
+              const tdcSub = tdcParts.length
+                ? `${tdcParts.join(" · ")} cm²${antsPart}`
+                : `TDC : <a class="fmz-gb-link" href="${esc(SHORTCUT_LINKS.membersUrl)}">Lire page Membres</a>${antsPart}`;
               return `
-                <div class="fmz-gb-row ${isWarn ? "soon" : ""}">
+                <div class="fmz-gb-row ${isWarn ? "soon" : ""} targeted-me">
                   <div class="fmz-gb-row-top">
                     <b>${isCritical ? "🚨" : "🐎"} ${esc(a.attacker || "Inconnu")}</b>
                     <span class="fmz-gb-cd ${urgencyClass}" data-cd="${a.arrivalAt}">${formatDuration(leftSec)}</span>
                   </div>
-                  <div class="fmz-gb-sub">${tdcSub}</div>
+                  <div class="fmz-gb-tdc">${tdcSub}</div>
                 </div>
               `;
             })
@@ -2151,23 +2667,6 @@
                   <div class="fmz-gb-row-top">
                     <span>De <b>${esc(c.fromName)}</b> · 🪵 ${formatNumber(c.wood)} · 🍎 ${formatNumber(c.apples)}</span>
                     <span class="fmz-gb-cd" data-cd="${c.arrivalAt}">${formatDuration(leftSec)}</span>
-                  </div>
-                </div>
-              `;
-            })
-            .join("");
-
-      const huntsHtml = !allHunts.length
-        ? `<div class="fmz-gb-empty">Aucune chasse en cours dans l'alliance.</div>`
-        : allHunts
-            .map((h) => {
-              const leftSec = Math.max(0, Math.ceil((h.arrivalAt - now) / 1000));
-              const areaLabel = h.area ? ` · ${formatNumber(h.area)} cm²` : "";
-              return `
-                <div class="fmz-gb-row">
-                  <div class="fmz-gb-row-top">
-                    <span><b>${esc(h.player || "Joueur")}</b>${areaLabel}</span>
-                    <span class="fmz-gb-cd" data-cd="${h.arrivalAt}">${formatDuration(leftSec)}</span>
                   </div>
                 </div>
               `;
@@ -2224,6 +2723,15 @@
           ${accountHtml}
 
           ${renderSectionBlock(
+            "hunts",
+            "⚔️ Chasses en cours (tous)",
+            allHunts.length,
+            huntsHtml,
+            "hunt",
+            !!collapsedMap.hunts
+          )}
+
+          ${renderSectionBlock(
             "attacks",
             "🛡️ Attaques en cours sur moi",
             incomingAttacks.length,
@@ -2242,15 +2750,6 @@
           )}
 
           ${renderSectionBlock(
-            "hunts",
-            "⚔️ Chasses en cours (tous)",
-            allHunts.length,
-            huntsHtml,
-            "hunt",
-            !!collapsedMap.hunts
-          )}
-
-          ${renderSectionBlock(
             "convoy_out",
             "📤 Convois que j'ai lancés",
             convoys.outgoing.length,
@@ -2265,12 +2764,10 @@
     root.innerHTML = `
       ${cardHtml}
       <div class="fmz-gb-dock">
-        <a id="fmz-gb-discord-fab" class="fmz-gb-fab" href="${esc(SHORTCUT_LINKS.discordUrl)}" target="_blank" rel="noopener noreferrer" title="Ouvrir Discord">
-          <span>💬 Discord</span>
-        </a>
-        <a id="fmz-gb-site-fab" class="fmz-gb-fab" href="${esc(SHORTCUT_LINKS.siteUrl)}" target="_blank" rel="noopener noreferrer" title="Ouvrir le site applizzz">
-          <span>🌐 Site</span>
-        </a>
+        <button id="fmz-gb-alliance-fab" class="fmz-gb-fab alliance ${isAllianceOpen ? "active" : ""} ${allAllianceAttacks.length > 0 ? "alert" : ""}" type="button" title="Toutes les attaques de l'alliance">
+          <span>🛡️ Alliance</span>
+          <span class="fmz-gb-pill">${allAllianceAttacks.length}</span>
+        </button>
         <button id="fmz-gb-convoy-fab" class="fmz-gb-fab convoy ${isConvoyOpen ? "active" : ""}" type="button" title="Demandes et convois">
           <span>🚚 Convois</span>
           <span class="fmz-gb-pill">${openRequestsCount}</span>
@@ -2282,19 +2779,75 @@
       </div>
     `;
 
+    const statsFab = leftDock.querySelector("#fmz-gb-stats-fab");
+    if (statsFab) {
+      statsFab.onclick = () => {
+        const next = !isStatsBubbleOpen();
+        setStatsBubbleOpen(next);
+        if (next) {
+          setGlobalBubbleOpen(false);
+          setConvoyBubbleOpen(false);
+          setAllianceBubbleOpen(false);
+        }
+        renderGlobalBubble();
+      };
+    }
+
+    root.querySelector("#fmz-gb-alliance-fab").onclick = () => {
+      const next = !isAllianceBubbleOpen();
+      setAllianceBubbleOpen(next);
+      if (next) {
+        setGlobalBubbleOpen(false);
+        setConvoyBubbleOpen(false);
+        setStatsBubbleOpen(false);
+      }
+      renderGlobalBubble();
+    };
+
     root.querySelector("#fmz-gb-fab").onclick = () => {
       const next = !isGlobalBubbleOpen();
       setGlobalBubbleOpen(next);
-      if (next) setConvoyBubbleOpen(false);
+      if (next) {
+        setConvoyBubbleOpen(false);
+        setAllianceBubbleOpen(false);
+        setStatsBubbleOpen(false);
+      }
       renderGlobalBubble();
     };
 
     root.querySelector("#fmz-gb-convoy-fab").onclick = () => {
       const next = !isConvoyBubbleOpen();
       setConvoyBubbleOpen(next);
-      if (next) setGlobalBubbleOpen(false);
+      if (next) {
+        setGlobalBubbleOpen(false);
+        setAllianceBubbleOpen(false);
+        setStatsBubbleOpen(false);
+      }
       renderGlobalBubble();
     };
+
+    root.querySelectorAll("[data-al-filter]").forEach((btn) => {
+      btn.onclick = () => {
+        allianceAttackFilter = btn.getAttribute("data-al-filter") || "all";
+        renderGlobalBubble();
+      };
+    });
+
+    const closeStatsBtn = root.querySelector("#fmz-gb-st-close");
+    if (closeStatsBtn) {
+      closeStatsBtn.onclick = () => {
+        setStatsBubbleOpen(false);
+        renderGlobalBubble();
+      };
+    }
+
+    const closeAllianceBtn = root.querySelector("#fmz-gb-al-close");
+    if (closeAllianceBtn) {
+      closeAllianceBtn.onclick = () => {
+        setAllianceBubbleOpen(false);
+        renderGlobalBubble();
+      };
+    }
 
     const closeDomeBtn = root.querySelector("#fmz-gb-close");
     if (closeDomeBtn) {
@@ -2445,8 +2998,11 @@
       e.key === STORAGE_KEYS.convoyRequests ||
       e.key === STORAGE_KEYS.bubbleOpen ||
       e.key === STORAGE_KEYS.convoyBubbleOpen ||
+      e.key === STORAGE_KEYS.allianceBubbleOpen ||
+      e.key === STORAGE_KEYS.statsBubbleOpen ||
       e.key === STORAGE_KEYS.bubbleSections ||
-      e.key === STORAGE_KEYS.allianceTdc
+      e.key === STORAGE_KEYS.allianceTdc ||
+      e.key === STORAGE_KEYS.allianceStats
     ) {
       runPageCycle();
     }
