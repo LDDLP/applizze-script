@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Le Dôme De La Paix - Fourmizzz S5 (Ressources, Armee & Commerce)
 // @namespace    https://s5.fourmizzz.fr/
-// @version      0.5.35-worker
+// @version      0.5.38-worker
 // @updateURL    https://raw.githubusercontent.com/LDDLP/applizze-script/main/fourmizzz.user.js
 // @downloadURL  https://raw.githubusercontent.com/LDDLP/applizze-script/main/fourmizzz.user.js
 // @description  Outils d'alliance centralisés sur S5 : chasses en tête du Dôme avec TDC + chassé, attaques compactes avec filtres et TDC attaquant/cible, statistiques sous MàJ script et convois.
@@ -25,6 +25,8 @@
   const IS_ENNEMIE = PATH.includes("ennemie.php");
   const IS_ATTACK_PAGE = IS_ARMEE || IS_ENNEMIE;
   const IS_COMMERCE = PATH.includes("commerce.php");
+
+  const OWN_ALLIANCE_TAG = "LDDLP";
 
   const SHORTCUT_LINKS = {
     discordUrl: "https://discord.com/app",
@@ -82,21 +84,25 @@
 
   const DEFAULT_PLAYERS = [
     { name: "Peps", x: 80, y: 52, va: 0 },
-    { name: "Blue", x: 27, y: 41, va: 0 },
+    { name: "Blue59", x: 27, y: 41, va: 0 },
     { name: "Legrotteuh", x: 30, y: 43, va: 0 },
     { name: "Silas88", x: 2, y: 47, va: 0 },
-    { name: "Grenouille", x: 95, y: 40, va: 0 },
+    { name: "GrenouilleQc101", x: 95, y: 40, va: 0 },
     { name: "Hydci", x: 37, y: 41, va: 0 },
     { name: "Scrimey", x: 0, y: 54, va: 0 },
     { name: "Roiscorpion", x: 93, y: 39, va: 0 },
     { name: "Mick", x: 2, y: 77, va: 0 },
-    { name: "Belphégor", x: 48, y: 56, va: 0 },
+    { name: "Belphegor", x: 48, y: 56, va: 0 },
     { name: "Eldindon", x: 98, y: 48, va: 0 },
     { name: "Disco", x: 17, y: 80, va: 0 },
     { name: "Halfou", x: 15, y: 79, va: 0 },
-    { name: "Spartiate", x: 95, y: 45, va: 0 },
+    { name: "spartiate61", x: 95, y: 45, va: 0 },
     { name: "DEADKAT", x: 35, y: 81, va: 0 },
-    { name: "Lafoufe", x: 94, y: 67, va: 0 }
+    { name: "Nyfarix", x: 77, y: 84, va: 0 },
+    { name: "Atiraya", x: 68, y: 82, va: 0 },
+    { name: "Ange", x: 25, y: 79, va: 0 },
+    { name: "Hantiz", x: 84, y: 78, va: 0 },
+    { name: "Arktik22", x: 68, y: 1, va: 0 }
   ];
 
   function setSyncState(state, label) {
@@ -180,15 +186,55 @@
     writeAllianceStats(normalized);
   }
 
+  function isKnownAllianceMemberName(pseudo) {
+    const norm = normalizePseudo(pseudo);
+    if (!norm) return false;
+    return DEFAULT_PLAYERS.some((p) => normalizePseudo(p.name) === norm);
+  }
+
+  function cleanAllianceTdcMap() {
+    const map = readAllianceTdcMap();
+    const cleaned = {};
+    let changed = false;
+
+    for (const [k, v] of Object.entries(map)) {
+      if (k === "_lastScanAt") {
+        cleaned[k] = v;
+        continue;
+      }
+      if (!v || typeof v !== "object") {
+        changed = true;
+        continue;
+      }
+      const pseudo = String(v.pseudo || k).trim();
+      const norm = normalizePseudo(pseudo);
+      if (isKnownAllianceMemberName(pseudo) && Number(v.tdc) > 0) {
+        cleaned[norm] = { ...v, pseudo, tdc: Math.floor(Number(v.tdc)) };
+      } else {
+        changed = true;
+      }
+    }
+
+    if (changed) {
+      writeAllianceTdcMap(cleaned);
+    }
+    return cleaned;
+  }
+
   function isMembersPageView() {
-    if (PATH.includes("alliance.php") && HREF.includes("membres")) return true;
+    if (!PATH.includes("alliance.php")) return false;
     const bodyText = document.body ? document.body.innerText : "";
-    return /les\s+membres\s+de\s+l['’]alliance/i.test(bodyText) && /\bpseudo\b/i.test(bodyText) && /\bterrain\b/i.test(bodyText);
+    const hasMembersTitle = /les\s+membres\s+de\s+l['’]alliance/i.test(bodyText);
+    if (!hasMembersTitle && !HREF.includes("membres")) return false;
+    if (OWN_ALLIANCE_TAG && !new RegExp(`\\b${OWN_ALLIANCE_TAG}\\b`, "i").test(bodyText)) {
+      return false;
+    }
+    return /\bpseudo\b/i.test(bodyText) && /\bterrain\b/i.test(bodyText);
   }
 
   function scrapeAllianceMembersTdc() {
-    if (!document.body) return 0;
-    const map = readAllianceTdcMap();
+    if (!document.body || !isMembersPageView()) return 0;
+    const map = cleanAllianceTdcMap();
     const now = Date.now();
     let count = 0;
 
@@ -225,6 +271,7 @@
         const norm = normalizePseudo(rawPseudo);
         const tdcVal = parseLeadingFrNumber(rawTerrain);
         if (!norm || !Number.isFinite(tdcVal) || tdcVal <= 0) continue;
+        if (!isKnownAllianceMemberName(rawPseudo)) continue;
 
         map[norm] = {
           pseudo: rawPseudo,
@@ -252,7 +299,7 @@
     for (const p of remotePlayers) {
       if (!p || typeof p !== "object") continue;
       const name = String(p.name || p.pseudo || p.player || "").trim();
-      if (!isCleanPlayerName(name)) continue;
+      if (!isCleanPlayerName(name) || !isKnownAllianceMemberName(name)) continue;
       const norm = normalizePseudo(name);
       const rawTdc = p.tdc ?? p.terrain ?? p.area ?? 0;
       const num = parseLeadingFrNumber(rawTdc);
@@ -336,8 +383,6 @@
 
   let tdcChainCache = { at: 0, attacks: new Map(), hunts: new Map() };
 
-  // Calcule les TDC "en chaîne" : attaques ET chasses sont rejouées dans l'ordre d'arrivée,
-  // chaque mouvement part du TDC laissé par le précédent pour le même joueur.
   function getTdcChains() {
     const nowMs = Date.now();
     if (nowMs - tdcChainCache.at < 500) return tdcChainCache;
@@ -1552,7 +1597,6 @@
 
     return nextAttacks;
   }
-
   function injectRessourcesStyles() {
     if (document.getElementById("fmz-script-style")) return;
     const style = document.createElement("style");
@@ -2324,7 +2368,7 @@
     const filteredAttacks = rawAttacks.filter((a) => {
       if (allianceAttackFilter === "incoming") return samePseudo(a.target, devUser);
       if (allianceAttackFilter === "outgoing") return samePseudo(a.attacker, devUser);
-      return true; // Tout = attaques des autres + sur moi + mes attaques
+      return true;
     });
 
     const hasUrgent = filteredAttacks.some((a) => (Number(a.arrivalAt || 0) - now) <= 30 * 60 * 1000);
@@ -2662,7 +2706,6 @@
     return String(raw || "").replace(/\s*\([^)]*\)\s*$/, "").trim();
   }
 
-  // Seuls les membres de l'alliance (ceux dont le TDC est connu) sont listés.
   function getKnownPlayers(now) {
     const byKey = new Map();
     const tdcMap = readAllianceTdcMap();
@@ -3348,6 +3391,7 @@
     renderGlobalBubble();
   }
 
+  cleanAllianceTdcMap();
   runPageCycle();
   consumePendingCommerceFillIfNeeded();
   pullFromWorker(true).then((changed) => {
