@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Le Dôme De La Paix - Fourmizzz S5 (Ressources, Armee & Commerce)
 // @namespace    https://s5.fourmizzz.fr/
-// @version      0.5.40-worker
+// @version      0.5.41-worker
 // @updateURL    https://raw.githubusercontent.com/LDDLP/applizze-script/main/fourmizzz.user.js
 // @downloadURL  https://raw.githubusercontent.com/LDDLP/applizze-script/main/fourmizzz.user.js
 // @description  Outils d'alliance centralisés sur S5 : chasses en tête du Dôme avec TDC + chassé, attaques compactes avec filtres, TDC attaquant/cible, règle 50%-300% / 20% max et convois.
@@ -20,6 +20,7 @@
 
   const PATH = window.location.pathname.toLowerCase();
   const HREF = window.location.href.toLowerCase();
+  const SEARCH = window.location.search.toLowerCase();
   const IS_RESSOURCES = PATH.includes("ressources.php");
   const IS_ACQUERIR_TERRAIN = PATH.includes("acquerirterrain.php");
   const IS_HUNT_PAGE = IS_RESSOURCES || IS_ACQUERIR_TERRAIN;
@@ -84,6 +85,7 @@
   let allianceAttackFilter = "all";
   let selectedPlayerKey = "";
 
+  // Liste stricte des membres de l'alliance LDDLP (seuls ces joueurs sont importés)
   const DEFAULT_PLAYERS = [
     { name: "Peps", x: 80, y: 52, va: 0 },
     { name: "Blue59", x: 27, y: 41, va: 0 },
@@ -107,6 +109,8 @@
     { name: "Arktik22", x: 68, y: 1, va: 0 },
     { name: "gireg", x: 90, y: 40, va: 0 }
   ];
+
+  const LDDLP_KEYS = new Set(DEFAULT_PLAYERS.map((p) => normalizePseudo(p.name)));
 
   function setSyncState(state, label) {
     syncStatus = { state, label, at: Date.now() };
@@ -181,10 +185,47 @@
     } catch (e) {}
   }
 
+  function computeAndStoreAllianceStatsFromMap(mapObj, now = Date.now()) {
+    const list = Object.entries(mapObj || {})
+      .filter(
+        ([k, v]) =>
+          k &&
+          !k.startsWith("_") &&
+          LDDLP_KEYS.has(normalizePseudo(k)) &&
+          v &&
+          typeof v.tdc === "number" &&
+          v.tdc > 0
+      )
+      .map(([, v]) => ({
+        name: playerDisplayName(v.pseudo),
+        tdc: Math.floor(v.tdc)
+      }))
+      .sort((a, b) => b.tdc - a.tdc);
+
+    if (!list.length) return null;
+
+    const totalTdc = list.reduce((sum, p) => sum + p.tdc, 0);
+    const avgTdc = Math.round(totalTdc / list.length);
+    const statsPayload = {
+      alliance: OWN_ALLIANCE_TAG,
+      memberCount: list.length,
+      totalTdc,
+      avgTdc,
+      topPlayers: list,
+      updatedAt: now
+    };
+    writeAllianceStats(statsPayload);
+    return statsPayload;
+  }
+
   function ingestRemoteStats(rawStats) {
     if (!rawStats || typeof rawStats !== "object") return;
+    const filteredTop = Array.isArray(rawStats.topPlayers)
+      ? rawStats.topPlayers.filter((p) => p && isKnownAllianceMemberName(p.name || p.pseudo || p.player))
+      : undefined;
     const normalized = {
       ...rawStats,
+      ...(filteredTop !== undefined ? { topPlayers: filteredTop } : {}),
       updatedAt: Number(rawStats.updatedAt) || Date.now()
     };
     writeAllianceStats(normalized);
@@ -193,7 +234,7 @@
   function isKnownAllianceMemberName(pseudo) {
     const norm = normalizePseudo(pseudo);
     if (!norm) return false;
-    return DEFAULT_PLAYERS.some((p) => normalizePseudo(p.name) === norm);
+    return LDDLP_KEYS.has(norm);
   }
 
   function cleanAllianceTdcMap() {
@@ -228,12 +269,12 @@
   function isMembersPageView() {
     if (!PATH.includes("alliance.php")) return false;
     const bodyText = document.body ? document.body.innerText : "";
-    const hasMembersTitle = /les\s+membres\s+de\s+l['’]alliance/i.test(bodyText);
-    if (!hasMembersTitle && !HREF.includes("membres")) return false;
+    const hasMembersTitle = /membres/i.test(bodyText) || SEARCH.includes("membres") || HREF.includes("membres");
+    if (!hasMembersTitle) return false;
     if (OWN_ALLIANCE_TAG && !new RegExp(`\\b${OWN_ALLIANCE_TAG}\\b`, "i").test(bodyText)) {
       return false;
     }
-    return /\bpseudo\b/i.test(bodyText) && /\bterrain\b/i.test(bodyText);
+    return /\bpseudo\b/i.test(bodyText) && (/\bterrain\b/i.test(bodyText) || /\btdc\b/i.test(bodyText));
   }
 
   function scrapeAllianceMembersTdc() {
@@ -255,31 +296,34 @@
         (c.innerText || "").replace(/\s+/g, " ").trim().toLowerCase()
       );
       headerCells.forEach((h, idx) => {
-        if (h.includes("pseudo")) pseudoColIdx = idx;
-        if (h.includes("terrain") || h.includes("tdc")) terrainColIdx = idx;
+        if (h.includes("pseudo") || h.includes("joueur") || h.includes("membre")) {
+          if (pseudoColIdx === -1) pseudoColIdx = idx;
+        }
+        if (h.includes("terrain") || h.includes("tdc") || h.includes("cm²") || h.includes("cm2")) {
+          if (terrainColIdx === -1) terrainColIdx = idx;
+        }
       });
 
-      if (pseudoColIdx === -1 && terrainColIdx === -1) continue;
+      if (pseudoColIdx === -1 || terrainColIdx === -1) continue;
 
       for (let i = 1; i < rows.length; i++) {
         const cells = Array.from(rows[i].cells || []);
-        if (cells.length < 2) continue;
+        if (cells.length <= Math.max(pseudoColIdx, terrainColIdx)) continue;
 
-        const rawPseudo = pseudoColIdx >= 0 && cells[pseudoColIdx]
-          ? (cells[pseudoColIdx].innerText || "").replace(/\s+/g, " ").trim()
-          : "";
-        const rawTerrain = terrainColIdx >= 0 && cells[terrainColIdx]
-          ? (cells[terrainColIdx].innerText || "").replace(/\s+/g, " ").trim()
-          : "";
+        const rawPseudo = (cells[pseudoColIdx].innerText || "").replace(/\s+/g, " ").trim();
+        const rawTerrain = (cells[terrainColIdx].innerText || "").replace(/\s+/g, " ").trim();
 
         const norm = normalizePseudo(rawPseudo);
         const tdcVal = parseLeadingFrNumber(rawTerrain);
         if (!norm || !Number.isFinite(tdcVal) || tdcVal <= 0) continue;
+
+        // Sécurité stricte : n'importer QUE les membres de l'alliance LDDLP
         if (!isKnownAllianceMemberName(rawPseudo)) continue;
 
         map[norm] = {
           pseudo: rawPseudo,
           tdc: Math.floor(tdcVal),
+          alliance: OWN_ALLIANCE_TAG,
           source: "alliance_page",
           updatedAt: now
         };
@@ -290,6 +334,19 @@
     if (count > 0) {
       map._lastScanAt = now;
       writeAllianceTdcMap(map);
+      const statsPayload = computeAndStoreAllianceStatsFromMap(map, now);
+      const playersList = Object.entries(map)
+        .filter(([k, v]) => k && !k.startsWith("_") && LDDLP_KEYS.has(k) && v && v.tdc > 0)
+        .map(([, v]) => ({
+          name: playerDisplayName(v.pseudo),
+          pseudo: playerDisplayName(v.pseudo),
+          tdc: Math.floor(v.tdc),
+          alliance: OWN_ALLIANCE_TAG
+        }));
+      syncWithWorker({ kind: "players", alliance: OWN_ALLIANCE_TAG, players: playersList }, "lddlp_players");
+      if (statsPayload) {
+        syncWithWorker({ kind: "stats", alliance: OWN_ALLIANCE_TAG, stats: statsPayload }, "lddlp_stats");
+      }
     }
     return count;
   }
@@ -312,6 +369,7 @@
         map[norm] = {
           pseudo: name,
           tdc: Math.floor(num),
+          alliance: OWN_ALLIANCE_TAG,
           source: "worker",
           updatedAt: now
         };
@@ -321,12 +379,13 @@
 
     if (updated) {
       writeAllianceTdcMap(map);
+      computeAndStoreAllianceStatsFromMap(map, now);
     }
   }
 
   function getPlayerTdc(pseudo) {
     const norm = normalizePseudo(pseudo);
-    if (!norm) return null;
+    if (!norm || !LDDLP_KEYS.has(norm)) return null;
     const map = readAllianceTdcMap();
     const entry = map[norm];
     if (entry && typeof entry.tdc === "number" && entry.tdc > 0) {
@@ -757,7 +816,7 @@
   }
 
   function isCleanPlayerName(raw) {
-    const s = String(raw || "").trim();
+    const s = String(raw || "").replace(/\s*\([^)]*\)\s*$/, "").trim();
     if (!s || s.length > 28) return false;
     if (/\b(?:rang|pseudo|terrain|technologie|fourmili[eè]re|chef|gardien|diplomate|recrue)\b/i.test(s)) {
       return false;
@@ -807,6 +866,24 @@
     return parseFrInt(m[0]);
   }
 
+  // Convertit une durée restante (ex: "3H 42m 51s") en heure d'arrivée timestamp (ms),
+  // recadrée sur une heure d'arrivée existante très proche (<= 3 min) pour éviter toute dérive.
+  function computeArrivalTimestamp(remSec, nowMs, existingArrivalTimes = []) {
+    const rawArrival = nowMs + remSec * 1000;
+    let bestExisting = 0;
+    let bestDiff = Infinity;
+    for (const t of existingArrivalTimes) {
+      const ts = Number(t || 0);
+      if (ts <= nowMs) continue;
+      const diff = Math.abs(ts - rawArrival);
+      if (diff <= 180000 && diff < bestDiff) {
+        bestDiff = diff;
+        bestExisting = ts;
+      }
+    }
+    return bestExisting || rawArrival;
+  }
+
   function parseRemainingSeconds(text) {
     const match = String(text || "").match(
       /\b(?:dans|durera\s*:?)\s+(.+?)(?=\s+-\s*(?:Retour|Annuler)\b|\s+Arrivée\b|\s+Troupes\s+en\s+attaques?\b|$)/i
@@ -846,9 +923,8 @@
   }
 
   function buildStableSig(parts, fallbackArrivalAt, arrivalLabel) {
-    const cleanLabel = String(arrivalLabel || "").trim().toLowerCase().replace(/\s+/g, " ");
-    const timeKey = cleanLabel ? "lbl:" + cleanLabel : "bkt:" + Math.round(fallbackArrivalAt / 30000);
-    return parts.concat(timeKey).join("#");
+    const minuteBucket = Math.round(Number(fallbackArrivalAt || 0) / 60000);
+    return parts.concat("arr:" + minuteBucket).join("#");
   }
 
   function readJsonArray(key) {
@@ -1170,17 +1246,34 @@
     return merged;
   }
 
+  function convoyDedupeKey(m) {
+    const fromN = normalizePseudo((m.from && m.from.name) || m.createdBy || "");
+    const toN = normalizePseudo((m.to && m.to.name) || "");
+    const wood = Number(m.wood || 0);
+    const apples = Number(m.apples || 0);
+    const arrMin = Math.round(Number(m.arrivalAt || 0) / 60000);
+    return `${fromN}|${toN}|${wood}|${apples}|${arrMin}`;
+  }
+
   function mergeRemoteConvoys(remoteConvoys) {
     const now = Date.now();
     const localList = readJsonArray(STORAGE_KEYS.movements).filter((m) => m && Number(m.arrivalAt) > now - 5000);
-    const byId = new Map(localList.map((m) => [String(m.id), m]));
+    const byKey = new Map();
+
+    for (const m of localList) {
+      if (!m || Number(m.arrivalAt) <= now) continue;
+      byKey.set(convoyDedupeKey(m), m);
+    }
 
     for (const m of remoteConvoys) {
       if (!m || m.id === undefined || Number(m.arrivalAt) <= now) continue;
-      byId.set(String(m.id), m);
+      const key = convoyDedupeKey(m);
+      if (!byKey.has(key)) {
+        byKey.set(key, m);
+      }
     }
 
-    const merged = Array.from(byId.values());
+    const merged = Array.from(byKey.values());
     writeJsonArray(STORAGE_KEYS.movements, merged);
     return merged;
   }
@@ -1268,6 +1361,7 @@
   function extractHuntsFromPage() {
     const now = Date.now();
     const playerName = getDevUser();
+    const existingArrivals = readJsonArray(STORAGE_KEYS.hunts).map((h) => h && h.arrivalAt);
     const fullText = document.body ? document.body.innerText : "";
     const lines = fullText.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
 
@@ -1300,7 +1394,7 @@
       const arrivalMatch = blk.join(" ").match(/arriv[ée]e?\s+((?:demain\s+)?à\s+\d{1,2}h\d{2})/i);
       const arrivalLabel = arrivalMatch ? arrivalMatch[1] : "";
 
-      const arrivalAt = now + remSec * 1000;
+      const arrivalAt = computeArrivalTimestamp(remSec, now, existingArrivals);
       const sig = buildStableSig(
         [
           normalizePseudo(playerName),
@@ -1354,7 +1448,7 @@
           troops: [],
           arrivalLabel: item.arrivalLabel || prev.arrivalLabel,
           firstSeenAt: Number(prev.firstSeenAt || prev.detectedAt || item.firstSeenAt || now),
-          arrivalAt: diff < 30000 ? prev.arrivalAt : item.arrivalAt,
+          arrivalAt: diff < 180000 ? prev.arrivalAt : item.arrivalAt,
           active: true
         };
         bySig.set(item.sig, mergedItem);
@@ -1543,17 +1637,24 @@
       (m) => m && m.type === "convoy" && Number(m.arrivalAt || 0) > now
     );
 
-    const byId = new Map();
+    const byKey = new Map();
     for (const m of activeMovements) {
-      const id = String(m.id || `${m.arrivalAt}_${m.wood}_${m.apples}`);
-      byId.set(id, {
-        id,
-        fromName: (m.from && m.from.name) || m.createdBy || "Joueur",
-        toName: (m.to && m.to.name) || "Destinataire",
-        wood: Number(m.wood) || 0,
-        apples: Number(m.apples) || 0,
-        arrivalAt: Number(m.arrivalAt)
-      });
+      const fromName = (m.from && m.from.name) || m.createdBy || "Joueur";
+      const toName = (m.to && m.to.name) || "Destinataire";
+      const wood = Number(m.wood) || 0;
+      const apples = Number(m.apples) || 0;
+      const arrivalAt = Number(m.arrivalAt);
+      const key = `${normalizePseudo(fromName)}|${normalizePseudo(toName)}|${wood}|${apples}|${Math.round(arrivalAt / 60000)}`;
+      if (!byKey.has(key)) {
+        byKey.set(key, {
+          id: String(m.id || key),
+          fromName,
+          toName,
+          wood,
+          apples,
+          arrivalAt
+        });
+      }
     }
 
     for (const r of convoyRequests) {
@@ -1561,21 +1662,25 @@
       for (const d of r.deliveries) {
         const arrAt = Number(d && d.arrivalAt || 0);
         if (!arrAt || arrAt <= now) continue;
-        const id = d.movementId ? String(d.movementId) : `del_${r.id}_${arrAt}`;
-        if (!byId.has(id)) {
-          byId.set(id, {
-            id,
-            fromName: d.by || d.loggedBy || "Joueur",
-            toName: r.player || "Destinataire",
-            wood: Number(d.wood) || 0,
-            apples: Number(d.apples) || 0,
+        const fromName = d.by || d.loggedBy || "Joueur";
+        const toName = r.player || "Destinataire";
+        const wood = Number(d.wood) || 0;
+        const apples = Number(d.apples) || 0;
+        const key = `${normalizePseudo(fromName)}|${normalizePseudo(toName)}|${wood}|${apples}|${Math.round(arrAt / 60000)}`;
+        if (!byKey.has(key)) {
+          byKey.set(key, {
+            id: d.movementId ? String(d.movementId) : key,
+            fromName,
+            toName,
+            wood,
+            apples,
             arrivalAt: arrAt
           });
         }
       }
     }
 
-    const all = Array.from(byId.values()).sort((a, b) => a.arrivalAt - b.arrivalAt);
+    const all = Array.from(byKey.values()).sort((a, b) => a.arrivalAt - b.arrivalAt);
     return {
       incoming: all.filter((c) => normalizePseudo(c.toName) === meNorm),
       outgoing: all.filter((c) => normalizePseudo(c.fromName) === meNorm)
@@ -1584,9 +1689,11 @@
 
   let armeeBubbleTimer = null;
   let lastArmeeSnapshotKey = "";
+  let commerceBubbleTimer = null;
+  let lastCommerceSnapshotKey = "";
 
   function ensureArmeeIndicator() {
-    if (!IS_ATTACK_PAGE) return null;
+    if (!IS_ATTACK_PAGE && !IS_COMMERCE) return null;
     if (!document.getElementById("fmz-armee-style")) {
       const style = document.createElement("style");
       style.id = "fmz-armee-style";
@@ -1612,29 +1719,32 @@
     if (!wrap) {
       wrap = document.createElement("div");
       wrap.id = "fmz-armee-badge-wrap";
-      wrap.innerHTML = `<div id="fmz-armee-bubble" role="status" aria-live="polite">Attaques importées</div>`;
+      wrap.innerHTML = `<div id="fmz-armee-bubble" role="status" aria-live="polite"></div>`;
       document.body.appendChild(wrap);
     }
     return wrap;
   }
 
   function showArmeeImportedBubble(message = "Attaques importées") {
-    if (!IS_ATTACK_PAGE) return;
+    if (!IS_ATTACK_PAGE && !IS_COMMERCE) return;
     ensureArmeeIndicator();
     const bubble = document.getElementById("fmz-armee-bubble");
     if (!bubble) return;
     bubble.textContent = message;
     bubble.classList.add("show");
-    if (armeeBubbleTimer) clearTimeout(armeeBubbleTimer);
-    armeeBubbleTimer = setTimeout(() => {
+    const activeTimer = IS_COMMERCE ? commerceBubbleTimer : armeeBubbleTimer;
+    if (activeTimer) clearTimeout(activeTimer);
+    const timerId = setTimeout(() => {
       bubble.classList.remove("show");
-      armeeBubbleTimer = null;
     }, 3000);
+    if (IS_COMMERCE) commerceBubbleTimer = timerId;
+    else armeeBubbleTimer = timerId;
   }
 
   function extractAttacksFromArmeePage() {
     const now = Date.now();
     const attackerName = getDevUser();
+    const existingArrivals = readJsonArray(STORAGE_KEYS.attacks).map((a) => a && a.arrivalAt);
     const fullText = document.body ? document.body.innerText : "";
     const lines = fullText.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
 
@@ -1690,7 +1800,7 @@
       const arrivalMatch = arrivalLine.match(/arriv[ée]e?\s+((?:demain\s+)?à\s+\d{1,2}h\d{2})/i);
       const arrivalLabel = arrivalMatch ? arrivalMatch[1] : "";
 
-      const arrivalAt = now + remSec * 1000;
+      const arrivalAt = computeArrivalTimestamp(remSec, now, existingArrivals);
       const sig = buildStableSig(
         [
           normalizePseudo(attackerName),
@@ -1755,7 +1865,7 @@
           ants: item.ants || prev.ants,
           arrivalLabel: item.arrivalLabel || prev.arrivalLabel,
           rawText: item.rawText || prev.rawText || "",
-          arrivalAt: diff < 30000 ? prev.arrivalAt : item.arrivalAt,
+          arrivalAt: diff < 180000 ? prev.arrivalAt : item.arrivalAt,
           active: true
         });
       } else {
@@ -1779,7 +1889,7 @@
 
     return nextAttacks;
   }
-function removeLegacyRessourcesPanel() {
+  function removeLegacyRessourcesPanel() {
     const oldPanel = document.getElementById("fmz-panel");
     if (oldPanel) oldPanel.remove();
     const oldStyle = document.getElementById("fmz-script-style");
@@ -1820,9 +1930,15 @@ function removeLegacyRessourcesPanel() {
   }
 
   function getOngoingDirectConvoys(now = Date.now()) {
-    return readJsonArray(STORAGE_KEYS.movements).filter(
+    const raw = readJsonArray(STORAGE_KEYS.movements).filter(
       (m) => m && m.type === "convoy" && Number(m.arrivalAt || 0) > now
     );
+    const byKey = new Map();
+    for (const m of raw) {
+      const k = convoyDedupeKey(m);
+      if (!byKey.has(k)) byKey.set(k, m);
+    }
+    return Array.from(byKey.values());
   }
 
   function isOwnRequest(r, currentUser) {
@@ -1942,9 +2058,14 @@ function removeLegacyRessourcesPanel() {
     if (!IS_COMMERCE || !document.body) return [];
     const now = Date.now();
     const senderName = getDevUser();
+    const existingArrivals = readJsonArray(STORAGE_KEYS.movements)
+      .filter((m) => m && m.type === "convoy")
+      .map((m) => m.arrivalAt);
+
     const fullText = document.body.innerText || "";
     const lines = fullText.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
     const parsed = [];
+    const seenKeys = new Set();
 
     for (let i = 0; i < lines.length; i++) {
       let line = lines[i].replace(/^-+\s*/, "");
@@ -1985,9 +2106,13 @@ function removeLegacyRessourcesPanel() {
 
       if (apples <= 0 && wood <= 0) continue;
 
-      const arrivalAt = now + remSec * 1000;
-      const bucket = Math.round(arrivalAt / 30000);
-      const id = `cv_${normalizePseudo(senderName)}_${destNorm}_${apples}_${wood}_${bucket}`;
+      const arrivalAt = computeArrivalTimestamp(remSec, now, existingArrivals);
+      const minuteBucket = Math.round(arrivalAt / 60000);
+      const dedupeKey = `${normalizePseudo(senderName)}|${destNorm}|${wood}|${apples}|${minuteBucket}`;
+      if (seenKeys.has(dedupeKey)) continue;
+      seenKeys.add(dedupeKey);
+
+      const id = `cv_${normalizePseudo(senderName)}_${destNorm}_${apples}_${wood}_${minuteBucket}`;
 
       parsed.push({
         id,
@@ -2012,36 +2137,33 @@ function removeLegacyRessourcesPanel() {
     const senderName = getDevUser();
     const senderNorm = normalizePseudo(senderName);
     const detected = extractOngoingConvoysFromCommercePage();
-    if (!detected.length) return;
+    if (!detected.length) {
+      lastCommerceSnapshotKey = "";
+      return;
+    }
 
     const movements = readJsonArray(STORAGE_KEYS.movements).filter(
       (m) => m && Number(m.arrivalAt || 0) > now - 5000
     );
-    const existingIds = new Set(movements.map((m) => String(m.id)));
+    const byKey = new Map(movements.map((m) => [convoyDedupeKey(m), m]));
     const newlyDetected = [];
 
     for (const cv of detected) {
-      const prevSame = movements.find(
-        (m) =>
-          m &&
-          m.type === "convoy" &&
-          normalizePseudo(m.from && m.from.name) === senderNorm &&
-          normalizePseudo(m.to && m.to.name) === normalizePseudo(cv.to.name) &&
-          Number(m.wood || 0) === Number(cv.wood || 0) &&
-          Number(m.apples || 0) === Number(cv.apples || 0) &&
-          Math.abs(Number(m.arrivalAt || 0) - Number(cv.arrivalAt || 0)) < 35000
-      );
-
+      const key = convoyDedupeKey(cv);
+      const prevSame = byKey.get(key);
       if (prevSame) {
         cv.id = prevSame.id;
         cv.arrivalAt = prevSame.arrivalAt;
         cv.requestId = prevSame.requestId || "";
-      } else if (!existingIds.has(cv.id)) {
-        movements.push(cv);
-        existingIds.add(cv.id);
+        byKey.set(key, { ...prevSame, ...cv });
+      } else {
+        byKey.set(key, cv);
         newlyDetected.push(cv);
       }
     }
+
+    const dedupedMovements = Array.from(byKey.values());
+    writeJsonArray(STORAGE_KEYS.movements, dedupedMovements);
 
     let requestsChanged = false;
     for (const cv of newlyDetected) {
@@ -2078,24 +2200,39 @@ function removeLegacyRessourcesPanel() {
         syncWithWorker({ kind: "requests", action: "deliver", id: matchingReq.id, delivery }, false);
       }
 
-      convoyLog.push({
-        from: senderName,
-        to: (cv.to && cv.to.name) || "Destinataire",
-        wood: cv.wood,
-        apples: cv.apples,
-        requestId: cv.requestId || "",
-        arrivalAt: cv.arrivalAt
-      });
-      syncWithWorker({ kind: "movements", action: "create", movement: cv }, false);
+      const alreadyLogged = convoyLog.some(
+        (item) =>
+          normalizePseudo(item.from) === senderNorm &&
+          normalizePseudo(item.to) === destNorm &&
+          Number(item.wood || 0) === Number(cv.wood || 0) &&
+          Number(item.apples || 0) === Number(cv.apples || 0) &&
+          Math.abs(Number(item.arrivalAt || 0) - Number(cv.arrivalAt || 0)) <= 180000
+      );
+      if (!alreadyLogged) {
+        convoyLog.push({
+          from: senderName,
+          to: (cv.to && cv.to.name) || "Destinataire",
+          wood: cv.wood,
+          apples: cv.apples,
+          requestId: cv.requestId || "",
+          arrivalAt: cv.arrivalAt
+        });
+      }
+      syncWithWorker({ kind: "movements", action: "create", movement: cv }, `convoy_${key}`);
     }
 
     if (newlyDetected.length > 0) {
-      writeJsonArray(STORAGE_KEYS.movements, movements);
       saveConvoyLog();
       if (requestsChanged) {
         saveConvoyRequestsLocal();
       }
-      lastCommerceMessage = `✓ ${newlyDetected.length} convoi(s) validé(s) depuis la page Commerce.`;
+      lastCommerceMessage = `✓ ${newlyDetected.length} convoi(s) importé(s) depuis la page Commerce.`;
+    }
+
+    const snapshotKey = detected.map((c) => convoyDedupeKey(c)).sort().join("||");
+    if (newlyDetected.length > 0 || snapshotKey !== lastCommerceSnapshotKey) {
+      lastCommerceSnapshotKey = snapshotKey;
+      showArmeeImportedBubble("Convois importés");
     }
   }
 
@@ -2355,8 +2492,8 @@ function removeLegacyRessourcesPanel() {
     if (Array.isArray(rawList)) {
       for (const item of rawList) {
         if (!item || typeof item !== "object") continue;
-        const pName = String(item.name || item.pseudo || item.player || "").trim();
-        if (!isCleanPlayerName(pName)) continue;
+        const pName = playerDisplayName(String(item.name || item.pseudo || item.player || "").trim());
+        if (!isCleanPlayerName(pName) || !isKnownAllianceMemberName(pName)) continue;
         const pVal = item.tdc ?? item.terrain ?? item.value ?? item.score ?? 0;
         const numVal = parseLeadingFrNumber(pVal);
         if (numVal !== null && numVal > 0) {
@@ -2370,10 +2507,10 @@ function removeLegacyRessourcesPanel() {
     }
 
     if (cleaned.length > 0) {
-      return cleaned.sort((a, b) => b.tdc - a.tdc).slice(0, 10);
+      return cleaned.sort((a, b) => b.tdc - a.tdc).slice(0, 15);
     }
 
-    return (fallbackPlayers || []).slice(0, 10);
+    return (fallbackPlayers || []).slice(0, 15);
   }
 
   function buildStatsBubbleHtml(devUser, now, collapsedMap) {
@@ -2384,12 +2521,13 @@ function removeLegacyRessourcesPanel() {
         ([k, v]) =>
           k &&
           !k.startsWith("_") &&
+          LDDLP_KEYS.has(normalizePseudo(k)) &&
           v &&
           typeof v.tdc === "number" &&
           v.tdc > 0 &&
           isCleanPlayerName(v.pseudo)
       )
-      .map(([, v]) => ({ name: v.pseudo, tdc: Math.floor(v.tdc) }))
+      .map(([, v]) => ({ name: playerDisplayName(v.pseudo), tdc: Math.floor(v.tdc) }))
       .sort((a, b) => b.tdc - a.tdc);
 
     const totalTdcFromMap = playersFromMap.reduce((sum, p) => sum + p.tdc, 0);
@@ -2407,7 +2545,7 @@ function removeLegacyRessourcesPanel() {
 
     const overviewRows = [];
     if (memberCount > 0) {
-      overviewRows.push(`<div class="fmz-gb-row"><div class="fmz-gb-row-top"><span>👥 Membres suivis</span><b>${formatNumber(memberCount)}</b></div></div>`);
+      overviewRows.push(`<div class="fmz-gb-row"><div class="fmz-gb-row-top"><span>👥 Membres ${OWN_ALLIANCE_TAG}</span><b>${formatNumber(memberCount)}</b></div></div>`);
     }
     if (totalTdc > 0) {
       overviewRows.push(`<div class="fmz-gb-row"><div class="fmz-gb-row-top"><span>📐 TDC total alliance</span><b>${formatNumber(totalTdc)} cm²</b></div></div>`);
@@ -2416,25 +2554,9 @@ function removeLegacyRessourcesPanel() {
       overviewRows.push(`<div class="fmz-gb-row"><div class="fmz-gb-row-top"><span>📊 TDC moyen</span><b>${formatNumber(avgTdc)} cm²</b></div></div>`);
     }
 
-    const extraEntries = stats && typeof stats === "object"
-      ? Object.entries(stats).filter(
-          ([k, v]) =>
-            !["updatedAt", "totalTdc", "tdcTotal", "total_tdc", "avgTdc", "tdcAvg", "averageTdc", "memberCount", "playersCount", "count", "topPlayers", "ranking", "items"].includes(k) &&
-            v !== null &&
-            v !== undefined &&
-            typeof v !== "object" &&
-            isCleanPlayerName(k)
-        )
-      : [];
-
-    extraEntries.forEach(([k, v]) => {
-      const valDisplay = typeof v === "number" ? formatNumber(v) : String(v);
-      overviewRows.push(`<div class="fmz-gb-row"><div class="fmz-gb-row-top"><span>${esc(k)}</span><b>${esc(valDisplay)}</b></div></div>`);
-    });
-
     const overviewHtml = overviewRows.length
       ? overviewRows.join("")
-      : `<div class="fmz-gb-empty">Aucune statistique reçue du site dev pour l'instant.</div>`;
+      : `<div class="fmz-gb-empty">Aucune statistique ${OWN_ALLIANCE_TAG} disponible (ouvre la page Membres de l'alliance).</div>`;
 
     const rawRanking =
       (stats && Array.isArray(stats.topPlayers) && stats.topPlayers) ||
@@ -2445,7 +2567,7 @@ function removeLegacyRessourcesPanel() {
     const rankingList = sanitizeRankingItems(rawRanking, playersFromMap);
 
     const rankingHtml = !rankingList.length
-      ? `<div class="fmz-gb-empty">Aucun classement disponible (ouvre la page Membres pour scanner les TDC).</div>`
+      ? `<div class="fmz-gb-empty">Aucun classement ${OWN_ALLIANCE_TAG} disponible (ouvre la page Membres).</div>`
       : rankingList
           .map((item, idx) => `
             <div class="fmz-gb-row">
@@ -2460,7 +2582,7 @@ function removeLegacyRessourcesPanel() {
     return `
       <div id="fmz-gb-card">
         <div class="fmz-gb-head">
-          <b>📊 Statistiques · ${esc(devUser)}</b>
+          <b>📊 Statistiques ${OWN_ALLIANCE_TAG} · ${esc(devUser)}</b>
           <div class="fmz-gb-head-actions">
             <button id="fmz-gb-refresh" class="fmz-gb-btn" type="button" title="Rafraîchir maintenant">🔄</button>
             <button id="fmz-gb-st-close" class="fmz-gb-btn" type="button" title="Réduire">_</button>
@@ -2469,12 +2591,12 @@ function removeLegacyRessourcesPanel() {
 
         <div class="fmz-gb-status-bar">
           <span>${esc(syncStatus.label)}</span>
-          <a class="fmz-gb-link" href="${esc(SHORTCUT_LINKS.siteUrl)}" target="_blank" rel="noopener noreferrer">Site dev (Statistiques)</a>
+          <a class="fmz-gb-link" href="${esc(SHORTCUT_LINKS.membersUrl)}">📋 Membres ${OWN_ALLIANCE_TAG}</a>
         </div>
 
         ${renderSectionBlock(
           "st_overview",
-          "📈 Synthèse alliance",
+          `📈 Synthèse ${OWN_ALLIANCE_TAG}`,
           overviewRows.length,
           overviewHtml,
           "in",
@@ -2483,7 +2605,7 @@ function removeLegacyRessourcesPanel() {
 
         ${renderSectionBlock(
           "st_ranking",
-          "🏆 Classement TDC",
+          `🏆 Classement TDC ${OWN_ALLIANCE_TAG}`,
           rankingList.length,
           rankingHtml,
           "out",
@@ -2850,14 +2972,19 @@ function removeLegacyRessourcesPanel() {
   function getKnownPlayers(now) {
     const byKey = new Map();
     const tdcMap = readAllianceTdcMap();
-    Object.entries(tdcMap).forEach(([k, v]) => {
-      if (!k || k.startsWith("_") || !v || !isCleanPlayerName(v.pseudo)) return;
-      if (!(Number(v.tdc) > 0)) return;
-      const key = normalizePseudo(v.pseudo);
-      const display = playerDisplayName(v.pseudo);
-      if (!key || !display || byKey.has(key)) return;
-      byKey.set(key, { key, name: display, count: 0, hunts: 0 });
-    });
+
+    // Toujours partir de la liste stricte LDDLP pour garantir l'affichage identique sur PC et mobile
+    for (const p of DEFAULT_PLAYERS) {
+      const display = playerDisplayName(p.name);
+      const key = normalizePseudo(display);
+      if (!key || !display || !LDDLP_KEYS.has(key)) continue;
+      const storedEntry = tdcMap[key];
+      const tdcVal =
+        storedEntry && typeof storedEntry.tdc === "number" && storedEntry.tdc > 0
+          ? Math.floor(storedEntry.tdc)
+          : (typeof p.tdc === "number" && p.tdc > 0 ? Math.floor(p.tdc) : null);
+      byKey.set(key, { key, name: display, tdc: tdcVal, count: 0, hunts: 0 });
+    }
 
     getAllAllianceAttacks(now).forEach((a) => {
       const p = byKey.get(normalizePseudo(a.target));
@@ -3016,10 +3143,10 @@ function removeLegacyRessourcesPanel() {
     }
 
     const rowsHtml = !players.length
-      ? `<div class="fmz-gb-empty">Aucun joueur connu (ouvre la page Membres pour scanner).</div>`
+      ? `<div class="fmz-gb-empty">Aucun joueur ${OWN_ALLIANCE_TAG} trouvé.</div>`
       : players
           .map((p) => {
-            const tdc = getPlayerTdc(p.name);
+            const tdc = p.tdc || getPlayerTdc(p.name);
             const isMe = p.key === meKey;
             return `
               <button class="fmz-gb-player ${isMe ? "me" : ""} ${p.count > 0 ? "attacked" : ""}" data-pl-select="${esc(p.key)}" type="button">
@@ -3036,7 +3163,7 @@ function removeLegacyRessourcesPanel() {
     return `
       <div id="fmz-gb-card">
         <div class="fmz-gb-head">
-          <b>👤 Joueurs · ${players.length}</b>
+          <b>👤 Joueurs ${OWN_ALLIANCE_TAG} · ${players.length}</b>
           <div class="fmz-gb-head-actions">
             <button id="fmz-gb-refresh" class="fmz-gb-btn" type="button" title="Rafraîchir maintenant">🔄</button>
             <button id="fmz-gb-pl-close" class="fmz-gb-btn" type="button" title="Réduire">_</button>
@@ -3097,7 +3224,7 @@ function removeLegacyRessourcesPanel() {
       root.id = "fmz-gb-root";
       document.body.appendChild(root);
     }
-    root.classList.toggle("has-armee-badge", IS_ATTACK_PAGE);
+    root.classList.toggle("has-armee-badge", IS_ATTACK_PAGE || IS_COMMERCE);
 
     const hasImminentAttack = incomingAttacks.some((a) => (Number(a.arrivalAt || 0) - now) <= 30 * 60 * 1000);
     const totalEvents =
@@ -3535,6 +3662,7 @@ function removeLegacyRessourcesPanel() {
       ensureArmeeIndicator();
       reconcileArmeeAttacks();
     } else if (IS_COMMERCE) {
+      ensureArmeeIndicator();
       consumePendingCommerceFillIfNeeded();
       reconcileCommerceConvoys();
     }
