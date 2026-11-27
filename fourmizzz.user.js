@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Le Dôme De La Paix - Fourmizzz S5 (Ressources, Armee & Commerce)
 // @namespace    https://s5.fourmizzz.fr/
-// @version      0.5.41-worker
+// @version      0.5.42-worker
 // @updateURL    https://raw.githubusercontent.com/LDDLP/applizze-script/main/fourmizzz.user.js
 // @downloadURL  https://raw.githubusercontent.com/LDDLP/applizze-script/main/fourmizzz.user.js
 // @description  Outils d'alliance centralisés sur S5 : chasses en tête du Dôme avec TDC + chassé, attaques compactes avec filtres, TDC attaquant/cible, règle 50%-300% / 20% max et convois.
@@ -10,6 +10,7 @@
 // @grant        GM_getValue
 // @grant        GM_setValue
 // @connect      applizze-worker.devreuxbenoit571.workers.dev
+// @connect      raw.githubusercontent.com
 // ==/UserScript==
 
 (function () {
@@ -17,6 +18,8 @@
 
   const HOST = window.location.hostname.toLowerCase();
   if (HOST !== "s5.fourmizzz.fr") return;
+
+  const SCRIPT_VERSION = "0.5.42-worker";
 
   const PATH = window.location.pathname.toLowerCase();
   const HREF = window.location.href.toLowerCase();
@@ -47,6 +50,7 @@
     convoyRequests: "fmz_local_convoy_requests_v1",
     convoyLog: "fmz_local_convoy_log_v1",
     pendingCommerceFill: "fmz_pending_commerce_fill_v1",
+    pendingConvoyMatch: "fmz_pending_convoy_match_v1",
     devUser: "fmz_local_dev_user_v1",
     allianceTdc: "fmz_alliance_tdc_v1",
     allianceStats: "fmz_alliance_stats_v1",
@@ -57,7 +61,8 @@
     allianceBubbleOpen: "fmz_alliance_bubble_open_v1",
     statsBubbleOpen: "fmz_stats_bubble_open_v1",
     playersBubbleOpen: "fmz_players_bubble_open_v1",
-    bubbleSections: "fmz_global_bubble_sections_v1"
+    bubbleSections: "fmz_global_bubble_sections_v1",
+    remoteVersionCache: "fmz_remote_version_cache_v1"
   };
 
   const DEFAULT_DEV_USER = "DEADKAT";
@@ -84,8 +89,8 @@
   let syncStatus = { state: "idle", label: "Prêt", at: 0 };
   let allianceAttackFilter = "all";
   let selectedPlayerKey = "";
+  let updateAvailableInfo = { available: false, remoteVersion: "" };
 
-  // Liste stricte des membres de l'alliance LDDLP (seuls ces joueurs sont importés)
   const DEFAULT_PLAYERS = [
     { name: "Peps", x: 80, y: 52, va: 0 },
     { name: "Blue59", x: 27, y: 41, va: 0 },
@@ -112,8 +117,94 @@
 
   const LDDLP_KEYS = new Set(DEFAULT_PLAYERS.map((p) => normalizePseudo(p.name)));
 
+  function compareScriptVersions(localVer, remoteVer) {
+    const parse = (v) => {
+      const clean = String(v || "").trim().replace(/^v/i, "");
+      const [numPart, suffix = ""] = clean.split("-");
+      const nums = numPart.split(".").map((n) => parseInt(n, 10) || 0);
+      return { nums, suffix: suffix.toLowerCase() };
+    };
+    const a = parse(localVer);
+    const b = parse(remoteVer);
+    const len = Math.max(a.nums.length, b.nums.length);
+    for (let i = 0; i < len; i++) {
+      const av = a.nums[i] || 0;
+      const bv = b.nums[i] || 0;
+      if (bv > av) return 1;
+      if (bv < av) return -1;
+    }
+    if (a.suffix !== b.suffix && b.suffix) return 1;
+    return 0;
+  }
+
+  function httpTextGet(url) {
+    if (typeof GM_xmlhttpRequest === "function") {
+      return new Promise((resolve) => {
+        GM_xmlhttpRequest({
+          method: "GET",
+          url,
+          headers: { "Cache-Control": "no-cache" },
+          onload: (res) => {
+            if (res.status >= 200 && res.status < 300) {
+              resolve({ ok: true, text: res.responseText || "" });
+            } else {
+              resolve({ ok: false, status: res.status });
+            }
+          },
+          onerror: () => resolve({ ok: false })
+        });
+      });
+    }
+    return fetch(url, { cache: "no-store" })
+      .then(async (res) => (res.ok ? { ok: true, text: await res.text() } : { ok: false, status: res.status }))
+      .catch(() => ({ ok: false }));
+  }
+
+  async function checkScriptUpdate(force = false) {
+    const now = Date.now();
+    try {
+      const rawCache = localStorage.getItem(STORAGE_KEYS.remoteVersionCache);
+      if (!force && rawCache) {
+        const cached = JSON.parse(rawCache);
+        if (cached && cached.checkedAt && now - cached.checkedAt < 10 * 60 * 1000 && cached.remoteVersion) {
+          const isNewer = compareScriptVersions(SCRIPT_VERSION, cached.remoteVersion) > 0;
+          updateAvailableInfo = { available: isNewer, remoteVersion: cached.remoteVersion };
+          return updateAvailableInfo;
+        }
+      }
+    } catch (e) {}
+
+    const url = `${SHORTCUT_LINKS.scriptUpdateUrl}?t=${now}`;
+    const res = await httpTextGet(url);
+    if (!res.ok || !res.text) return updateAvailableInfo;
+
+    const m = res.text.match(/@version\s+([^\r\n]+)/i);
+    if (!m) return updateAvailableInfo;
+
+    const remoteVersion = m[1].trim();
+    const isNewer = compareScriptVersions(SCRIPT_VERSION, remoteVersion) > 0;
+    updateAvailableInfo = { available: isNewer, remoteVersion };
+
+    try {
+      localStorage.setItem(
+        STORAGE_KEYS.remoteVersionCache,
+        JSON.stringify({ remoteVersion, checkedAt: now })
+      );
+    } catch (e) {}
+
+    renderGlobalBubble();
+    return updateAvailableInfo;
+  }
+
+  function isSessionLocked() {
+    return syncStatus.state === "ok" || !!getStoredToken();
+  }
+
   function setSyncState(state, label) {
     syncStatus = { state, label, at: Date.now() };
+    if (isSessionLocked()) {
+      accountDrawerOpen = false;
+    }
   }
 
   function getDevUser() {
@@ -135,6 +226,7 @@
   }
 
   function setDevUser(name) {
+    if (isSessionLocked()) return getDevUser();
     const clean = String(name || "").trim() || DEFAULT_DEV_USER;
     const changed = normalizePseudo(getDevUser()) !== normalizePseudo(clean);
     try {
@@ -317,7 +409,6 @@
         const tdcVal = parseLeadingFrNumber(rawTerrain);
         if (!norm || !Number.isFinite(tdcVal) || tdcVal <= 0) continue;
 
-        // Sécurité stricte : n'importer QUE les membres de l'alliance LDDLP
         if (!isKnownAllianceMemberName(rawPseudo)) continue;
 
         map[norm] = {
@@ -444,9 +535,6 @@
     return 0;
   }
 
-  // Règles Fourmizzz :
-  // 1) L'attaquant peut attaquer une cible dont le TDC est entre 50% et 300% de son propre TDC actuel.
-  // 2) Une attaque valide prend au maximum 20% du TDC actuel de la cible (plafonné par les fourmis envoyées).
   function simulateTimeline(nowMs = Date.now(), extraHunts = []) {
     const running = new Map();
     const getRun = (pseudo) => {
@@ -866,8 +954,6 @@
     return parseFrInt(m[0]);
   }
 
-  // Convertit une durée restante (ex: "3H 42m 51s") en heure d'arrivée timestamp (ms),
-  // recadrée sur une heure d'arrivée existante très proche (<= 3 min) pour éviter toute dérive.
   function computeArrivalTimestamp(remSec, nowMs, existingArrivalTimes = []) {
     const rawArrival = nowMs + remSec * 1000;
     let bestExisting = 0;
@@ -1965,6 +2051,42 @@
     } catch (e) {}
   }
 
+  function queuePendingConvoyMatch(payload) {
+    if (!payload || !payload.requestId) return;
+    try {
+      localStorage.setItem(
+        STORAGE_KEYS.pendingConvoyMatch,
+        JSON.stringify({
+          requestId: String(payload.requestId),
+          recipient: String(payload.recipient || ""),
+          wood: clampNonNegativeInt(payload.wood),
+          apples: clampNonNegativeInt(payload.apples),
+          createdAt: Date.now(),
+          expiresAt: Date.now() + 10 * 60 * 1000
+        })
+      );
+    } catch (e) {}
+  }
+
+  function consumePendingConvoyMatch(recipientNorm) {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEYS.pendingConvoyMatch) || "";
+      if (!raw) return null;
+      const item = JSON.parse(raw);
+      if (!item || Number(item.expiresAt || 0) < Date.now()) {
+        localStorage.removeItem(STORAGE_KEYS.pendingConvoyMatch);
+        return null;
+      }
+      if (recipientNorm && normalizePseudo(item.recipient) !== recipientNorm) {
+        return null;
+      }
+      localStorage.removeItem(STORAGE_KEYS.pendingConvoyMatch);
+      return item;
+    } catch (e) {
+      return null;
+    }
+  }
+
   function fillCommerceFormFields({ recipient, apples, wood }) {
     if (!IS_COMMERCE) return { filledCount: 0, totalVisibleFields: 0 };
 
@@ -2168,28 +2290,45 @@
     let requestsChanged = false;
     for (const cv of newlyDetected) {
       const destNorm = normalizePseudo(cv.to && cv.to.name);
-      const matchingReq = convoyRequests
-        .filter((r) => r && r.status !== "done" && normalizePseudo(r.player) === destNorm && !isOwnRequest(r, senderName))
-        .sort((a, b) => Number(a.createdAt || 0) - Number(b.createdAt || 0))
-        .find((r) => {
-          const rem = reqRemaining(r);
-          const matchWood = cv.wood > 0 ? rem.wood >= cv.wood : rem.wood === 0;
-          const matchApples = cv.apples > 0 ? rem.apples >= cv.apples : rem.apples === 0;
-          return (cv.wood > 0 || cv.apples > 0) && matchWood && matchApples;
-        });
+      const pendingMatch = consumePendingConvoyMatch(destNorm);
+
+      let matchingReq = null;
+      if (pendingMatch && pendingMatch.requestId) {
+        matchingReq = convoyRequests.find(
+          (r) => r && r.id === pendingMatch.requestId && r.status !== "done" && !isOwnRequest(r, senderName)
+        );
+      }
+
+      if (!matchingReq) {
+        matchingReq = convoyRequests
+          .filter((r) => r && r.status !== "done" && normalizePseudo(r.player) === destNorm && !isOwnRequest(r, senderName))
+          .sort((a, b) => Number(a.createdAt || 0) - Number(b.createdAt || 0))
+          .find((r) => {
+            const rem = reqRemaining(r);
+            const hasResource = cv.wood > 0 || cv.apples > 0;
+            const okWood = cv.wood > 0 ? rem.wood > 0 : true;
+            const okApples = cv.apples > 0 ? rem.apples > 0 : true;
+            return hasResource && okWood && okApples;
+          });
+      }
 
       if (matchingReq) {
+        const remBefore = reqRemaining(matchingReq);
+        const appliedWood = cv.wood > 0 ? Math.min(remBefore.wood, cv.wood) : 0;
+        const appliedApples = cv.apples > 0 ? Math.min(remBefore.apples, cv.apples) : 0;
+
         cv.requestId = matchingReq.id;
         const delivery = {
           by: senderName,
           loggedBy: senderName,
-          wood: cv.wood,
-          apples: cv.apples,
+          wood: appliedWood > 0 ? appliedWood : cv.wood,
+          apples: appliedApples > 0 ? appliedApples : cv.apples,
           at: now,
           arrivalAt: cv.arrivalAt,
           movementId: cv.id
         };
         matchingReq.deliveries.push(delivery);
+
         const leftAfter = reqRemaining(matchingReq);
         if (leftAfter.wood <= 0 && leftAfter.apples <= 0) {
           matchingReq.status = "done";
@@ -2197,7 +2336,16 @@
         }
         delete convoyDrafts[matchingReq.id];
         requestsChanged = true;
-        syncWithWorker({ kind: "requests", action: "deliver", id: matchingReq.id, delivery }, false);
+        syncWithWorker(
+          {
+            kind: "requests",
+            action: "deliver",
+            id: matchingReq.id,
+            status: matchingReq.status,
+            delivery
+          },
+          false
+        );
       }
 
       const alreadyLogged = convoyLog.some(
@@ -2292,6 +2440,7 @@
     }
 
     const destName = r.player;
+    queuePendingConvoyMatch({ requestId: r.id, recipient: destName, wood, apples });
 
     if (IS_COMMERCE) {
       fillCommerceFormFields({ recipient: destName, apples, wood });
@@ -2318,6 +2467,20 @@
     const style = document.createElement("style");
     style.id = "fmz-global-bubble-style";
     style.textContent = `
+      @keyframes fmzUpdateBlink {
+        0%, 100% {
+          background:#991b1b;
+          border-color:#f87171;
+          color:#ffffff;
+          box-shadow:0 0 12px rgba(239,68,68,.85);
+        }
+        50% {
+          background:#ef4444;
+          border-color:#fecaca;
+          color:#ffffff;
+          box-shadow:0 0 20px rgba(248,113,113,1);
+        }
+      }
       #fmz-gb-left-dock{
         position:fixed;left:12px;bottom:14px;z-index:10000;
         display:flex;flex-direction:column;align-items:flex-start;gap:6px;
@@ -2349,6 +2512,9 @@
         background:#14532d;border-color:#22c55e;color:#dcfce7;
       }
       .fmz-gb-fab.update:hover{background:#166534;color:#fff}
+      .fmz-gb-fab.update.needs-update{
+        animation:fmzUpdateBlink 1s infinite ease-in-out;
+      }
       .fmz-gb-pill{
         background:#111827;border:1px solid #4b5563;border-radius:999px;
         padding:1px 6px;font-size:11px;color:#93c5fd;
@@ -2507,10 +2673,10 @@
     }
 
     if (cleaned.length > 0) {
-      return cleaned.sort((a, b) => b.tdc - a.tdc).slice(0, 15);
+      return cleaned.sort((a, b) => b.tdc - a.tdc);
     }
 
-    return (fallbackPlayers || []).slice(0, 15);
+    return fallbackPlayers || [];
   }
 
   function buildStatsBubbleHtml(devUser, now, collapsedMap) {
@@ -2973,7 +3139,6 @@
     const byKey = new Map();
     const tdcMap = readAllianceTdcMap();
 
-    // Toujours partir de la liste stricte LDDLP pour garantir l'affichage identique sur PC et mobile
     for (const p of DEFAULT_PLAYERS) {
       const display = playerDisplayName(p.name);
       const key = normalizePseudo(display);
@@ -3184,6 +3349,7 @@
 
     const now = Date.now();
     const devUser = getDevUser();
+    const locked = isSessionLocked();
     const incomingAttacks = getIncomingAttacksForCurrentUser();
     const allAllianceAttacks = getAllAllianceAttacks(now);
     const convoys = getConvoySummaryForUser(devUser, now);
@@ -3203,6 +3369,14 @@
       document.body.appendChild(leftDock);
     }
 
+    const updateBtnClass = `fmz-gb-fab update${updateAvailableInfo.available ? " needs-update" : ""}`;
+    const updateBtnLabel = updateAvailableInfo.available
+      ? `⬆️ MàJ (${esc(updateAvailableInfo.remoteVersion)})`
+      : "⬆️ MàJ script";
+    const updateBtnTitle = updateAvailableInfo.available
+      ? `Nouvelle version ${updateAvailableInfo.remoteVersion} disponible (actuelle : ${SCRIPT_VERSION})`
+      : `Script à jour (${SCRIPT_VERSION})`;
+
     leftDock.innerHTML = `
       <a id="fmz-gb-discord-fab" class="fmz-gb-fab" href="${esc(SHORTCUT_LINKS.discordUrl)}" target="_blank" rel="noopener noreferrer" title="Ouvrir Discord">
         <span>💬 Discord</span>
@@ -3210,8 +3384,8 @@
       <a id="fmz-gb-site-fab" class="fmz-gb-fab" href="${esc(SHORTCUT_LINKS.siteUrl)}" target="_blank" rel="noopener noreferrer" title="Ouvrir le site applizzz">
         <span>🌐 Site</span>
       </a>
-      <a id="fmz-gb-update-fab" class="fmz-gb-fab update" href="${esc(SHORTCUT_LINKS.scriptUpdateUrl)}" target="_blank" rel="noopener noreferrer" title="Mettre à jour le script depuis GitHub">
-        <span>⬆️ MàJ script</span>
+      <a id="fmz-gb-update-fab" class="${updateBtnClass}" href="${esc(SHORTCUT_LINKS.scriptUpdateUrl)}" target="_blank" rel="noopener noreferrer" title="${esc(updateBtnTitle)}">
+        <span>${updateBtnLabel}</span>
       </a>
       <button id="fmz-gb-stats-fab" class="fmz-gb-fab stats ${isStatsOpen ? "active" : ""}" type="button" title="Statistiques de l'alliance">
         <span>📊 Statistiques</span>
@@ -3354,7 +3528,7 @@
             })
             .join("");
 
-      const accountHtml = accountDrawerOpen
+      const accountHtml = !locked && accountDrawerOpen
         ? `
           <div class="fmz-gb-account-box">
             <div class="fmz-gb-sub">Pseudo / Session Worker :</div>
@@ -3367,6 +3541,10 @@
         `
         : "";
 
+      const accBtnHtml = !locked
+        ? `<button id="fmz-gb-acc" class="fmz-gb-btn" type="button" title="Compte & session">⚙️</button>`
+        : "";
+
       const membersLink = `<a class="fmz-gb-link" href="${esc(SHORTCUT_LINKS.membersUrl)}">📋 Membres (TDC)</a>`;
 
       cardHtml = `
@@ -3375,7 +3553,7 @@
             <b>🐜 Dôme · ${esc(devUser)}</b>
             <div class="fmz-gb-head-actions">
               <button id="fmz-gb-refresh" class="fmz-gb-btn" type="button" title="Rafraîchir maintenant">🔄</button>
-              <button id="fmz-gb-acc" class="fmz-gb-btn" type="button" title="Compte & session">⚙️</button>
+              ${accBtnHtml}
               <button id="fmz-gb-close" class="fmz-gb-btn" type="button" title="Réduire">_</button>
             </div>
           </div>
@@ -3577,6 +3755,7 @@
       refreshBtn.onclick = async () => {
         setSyncState("syncing", "Synchro…");
         renderGlobalBubble();
+        checkScriptUpdate(true);
         await pullFromWorker(true);
         runPageCycle();
       };
@@ -3585,6 +3764,7 @@
     const accBtn = root.querySelector("#fmz-gb-acc");
     if (accBtn) {
       accBtn.onclick = () => {
+        if (isSessionLocked()) return;
         accountDrawerOpen = !accountDrawerOpen;
         renderGlobalBubble();
       };
@@ -3596,6 +3776,7 @@
 
     if (savePseudoBtn && pseudoInp) {
       const submitPseudo = () => {
+        if (isSessionLocked()) return;
         setDevUser(pseudoInp.value);
         accountDrawerOpen = false;
         runPageCycle();
@@ -3615,6 +3796,7 @@
 
     if (logoutBtn) {
       logoutBtn.onclick = () => {
+        if (isSessionLocked()) return;
         resetAccountSession(pseudoInp ? pseudoInp.value : "");
         accountDrawerOpen = false;
         runPageCycle();
@@ -3672,6 +3854,7 @@
   cleanAllianceTdcMap();
   runPageCycle();
   consumePendingCommerceFillIfNeeded();
+  checkScriptUpdate(false);
   pullFromWorker(true).then((changed) => {
     if (changed) runPageCycle();
     else renderGlobalBubble();
@@ -3694,6 +3877,7 @@
   setInterval(() => {
     const active = document.activeElement;
     if (active && active.closest && active.closest("#fmz-gb-root")) return;
+    checkScriptUpdate(false);
     pullFromWorker(false).then((changed) => {
       if (changed) runPageCycle();
       else renderGlobalBubble();
