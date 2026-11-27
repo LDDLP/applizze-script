@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Le Dôme De La Paix - Fourmizzz S5 (Ressources, Armee & Commerce)
 // @namespace    https://s5.fourmizzz.fr/
-// @version      0.5.33-worker
+// @version      0.5.35-worker
 // @updateURL    https://raw.githubusercontent.com/LDDLP/applizze-script/main/fourmizzz.user.js
 // @downloadURL  https://raw.githubusercontent.com/LDDLP/applizze-script/main/fourmizzz.user.js
 // @description  Outils d'alliance centralisés sur S5 : chasses en tête du Dôme avec TDC + chassé, attaques compactes avec filtres et TDC attaquant/cible, statistiques sous MàJ script et convois.
@@ -51,6 +51,7 @@
     convoyBubbleOpen: "fmz_convoy_bubble_open_v1",
     allianceBubbleOpen: "fmz_alliance_bubble_open_v1",
     statsBubbleOpen: "fmz_stats_bubble_open_v1",
+    playersBubbleOpen: "fmz_players_bubble_open_v1",
     bubbleSections: "fmz_global_bubble_sections_v1"
   };
 
@@ -77,6 +78,7 @@
   let lastSyncUpdatedAt = 0;
   let syncStatus = { state: "idle", label: "Prêt", at: 0 };
   let allianceAttackFilter = "all";
+  let selectedPlayerKey = "";
 
   const DEFAULT_PLAYERS = [
     { name: "Peps", x: 80, y: 52, va: 0 },
@@ -287,8 +289,17 @@
   }
 
   function getHuntTdcSummary(huntItem) {
+    const chain = getHuntTdcChain().get(String((huntItem && (huntItem.sig || huntItem.id)) || ""));
+    if (chain && chain.before > 0) {
+      return {
+        hasTdc: true,
+        beforeTdc: chain.before,
+        afterTdc: chain.after,
+        gainedTdc: chain.gain
+      };
+    }
     const playerPseudo = (huntItem && huntItem.player) || getDevUser();
-    const baseTdc = getPlayerTdc(playerPseudo) ?? getPlayerTdc(getDevUser());
+    const baseTdc = getPlayerTdc(playerPseudo);
     if (!baseTdc || baseTdc <= 0) {
       return { hasTdc: false, beforeTdc: null, afterTdc: null, gainedTdc: 0 };
     }
@@ -323,9 +334,89 @@
     return 0;
   }
 
+  let tdcChainCache = { at: 0, attacks: new Map(), hunts: new Map() };
+
+  // Calcule les TDC "en chaîne" : attaques ET chasses sont rejouées dans l'ordre d'arrivée,
+  // chaque mouvement part du TDC laissé par le précédent pour le même joueur.
+  function getTdcChains() {
+    const nowMs = Date.now();
+    if (nowMs - tdcChainCache.at < 500) return tdcChainCache;
+
+    const running = new Map();
+    const getRun = (pseudo) => {
+      const k = normalizePseudo(pseudo);
+      if (!k) return null;
+      if (!running.has(k)) running.set(k, getPlayerTdc(pseudo));
+      return running.get(k);
+    };
+
+    const events = [];
+    const seen = new Set();
+    getAllAllianceAttacks(nowMs).forEach((a) =>
+      events.push({ kind: "attack", at: Number(a.arrivalAt || 0), item: a })
+    );
+    getAllActiveHunts(nowMs).forEach((h) => {
+      const k = String(h.sig || h.id);
+      if (seen.has(k)) return;
+      seen.add(k);
+      events.push({ kind: "hunt", at: Number(h.arrivalAt || 0), item: h });
+    });
+    events.sort((x, y) => x.at - y.at);
+
+    const attacks = new Map();
+    const hunts = new Map();
+
+    for (const ev of events) {
+      if (ev.kind === "attack") {
+        const a = ev.item;
+        const ants = Math.max(0, getAttackSentAnts(a));
+        const tBefore = getRun(a.target);
+        const aBefore = getRun(a.attacker);
+        const taken = tBefore != null ? Math.min(ants, tBefore) : ants;
+        const tAfter = tBefore != null ? tBefore - taken : null;
+        const aAfter = aBefore != null ? aBefore + taken : null;
+        if (tBefore != null) running.set(normalizePseudo(a.target), tAfter);
+        if (aBefore != null) running.set(normalizePseudo(a.attacker), aAfter);
+        attacks.set(String(a.sig || a.id), {
+          ants,
+          target: { before: tBefore, after: tAfter },
+          attacker: { before: aBefore, after: aAfter }
+        });
+      } else {
+        const h = ev.item;
+        const gain = Math.max(0, Number(h.area) || 0);
+        const before = getRun(h.player);
+        const after = before != null ? before + gain : null;
+        if (before != null) running.set(normalizePseudo(h.player), after);
+        hunts.set(String(h.sig || h.id), { gain, before, after });
+      }
+    }
+
+    tdcChainCache = { at: nowMs, attacks, hunts };
+    return tdcChainCache;
+  }
+
+  function getAttackTdcChain() {
+    return getTdcChains().attacks;
+  }
+
+  function getHuntTdcChain() {
+    return getTdcChains().hunts;
+  }
+
   function getAttackTdcSummary(attackItem) {
+    const chain = getAttackTdcChain().get(String((attackItem && (attackItem.sig || attackItem.id)) || ""));
+    if (chain && chain.target.before > 0) {
+      return {
+        hasTdc: true,
+        hasAnts: chain.ants > 0,
+        beforeTdc: chain.target.before,
+        afterTdc: chain.target.after,
+        sentAnts: chain.ants
+      };
+    }
     const targetPseudo = (attackItem && attackItem.target) || getDevUser();
-    const baseTdc = getPlayerTdc(targetPseudo) ?? getPlayerTdc(getDevUser());
+    const baseTdc = getPlayerTdc(targetPseudo);
     if (!baseTdc || baseTdc <= 0) {
       return { hasTdc: false, hasAnts: false, beforeTdc: null, afterTdc: null, sentAnts: 0 };
     }
@@ -342,6 +433,16 @@
   }
 
   function getAttackerTdcSummary(attackItem) {
+    const chain = getAttackTdcChain().get(String((attackItem && (attackItem.sig || attackItem.id)) || ""));
+    if (chain && chain.attacker.before > 0) {
+      return {
+        hasTdc: true,
+        hasAnts: chain.ants > 0,
+        beforeTdc: chain.attacker.before,
+        afterTdc: chain.attacker.after,
+        sentAnts: chain.ants
+      };
+    }
     const attackerPseudo = attackItem && attackItem.attacker;
     const baseTdc = getPlayerTdc(attackerPseudo);
     if (!baseTdc || baseTdc <= 0) {
@@ -474,6 +575,20 @@
   function setStatsBubbleOpen(open) {
     try {
       localStorage.setItem(STORAGE_KEYS.statsBubbleOpen, open ? "1" : "0");
+    } catch (e) {}
+  }
+
+  function isPlayersBubbleOpen() {
+    try {
+      return localStorage.getItem(STORAGE_KEYS.playersBubbleOpen) === "1";
+    } catch (e) {
+      return false;
+    }
+  }
+
+  function setPlayersBubbleOpen(open) {
+    try {
+      localStorage.setItem(STORAGE_KEYS.playersBubbleOpen, open ? "1" : "0");
     } catch (e) {}
   }
 
@@ -1916,7 +2031,7 @@
       .fmz-gb-fab.alert{
         background:#7f1d1d;border-color:#ef4444;color:#fff;
       }
-      .fmz-gb-fab.convoy.active, .fmz-gb-fab.alliance.active, .fmz-gb-fab.stats.active{
+      .fmz-gb-fab.convoy.active, .fmz-gb-fab.alliance.active, .fmz-gb-fab.stats.active, .fmz-gb-fab.players.active{
         background:#1e3a8a;border-color:#60a5fa;color:#fff;
       }
       .fmz-gb-fab.update{
@@ -2021,6 +2136,25 @@
       .fmz-gb-actions button{flex:1}
       .fmz-gb-msg{margin-top:6px;font-size:11px;color:#86efac}
       .fmz-gb-msg.warn{color:#fca5a5}
+      .fmz-gb-player{
+        display:flex;justify-content:space-between;align-items:center;gap:6px;
+        width:100%;background:#111827 !important;color:#f3f4f6 !important;
+        border:1px solid #374151;border-radius:6px;padding:6px 8px;margin-bottom:4px;
+        cursor:pointer;font-size:12px;text-align:left;
+      }
+      .fmz-gb-player:hover{background:#1f2937 !important;border-color:#60a5fa}
+      .fmz-gb-player.me{border-left:3px solid #22c55e}
+      .fmz-gb-player.attacked{border-left:3px solid #ef4444}
+      .fmz-gb-player-tdc{color:#9ca3af;font-size:11px;margin-left:6px}
+      .fmz-gb-badge{
+        background:#374151;color:#e5e7eb;border-radius:999px;
+        padding:1px 7px;font-size:11px;font-weight:bold;min-width:22px;text-align:center;
+      }
+      .fmz-gb-badge.alert{background:#7f1d1d;color:#fecaca;border:1px solid #ef4444}
+      .fmz-gb-summary{
+        background:#111827;border:1px solid #374151;border-radius:8px;
+        padding:7px 8px;margin-bottom:7px;font-size:11px;line-height:1.5;color:#cbd5e1;
+      }
     `;
     document.head.appendChild(style);
   }
@@ -2524,6 +2658,218 @@
     });
   }
 
+  function playerDisplayName(raw) {
+    return String(raw || "").replace(/\s*\([^)]*\)\s*$/, "").trim();
+  }
+
+  // Seuls les membres de l'alliance (ceux dont le TDC est connu) sont listés.
+  function getKnownPlayers(now) {
+    const byKey = new Map();
+    const tdcMap = readAllianceTdcMap();
+    Object.entries(tdcMap).forEach(([k, v]) => {
+      if (!k || k.startsWith("_") || !v || !isCleanPlayerName(v.pseudo)) return;
+      if (!(Number(v.tdc) > 0)) return;
+      const key = normalizePseudo(v.pseudo);
+      const display = playerDisplayName(v.pseudo);
+      if (!key || !display || byKey.has(key)) return;
+      byKey.set(key, { key, name: display, count: 0, hunts: 0 });
+    });
+
+    getAllAllianceAttacks(now).forEach((a) => {
+      const p = byKey.get(normalizePseudo(a.target));
+      if (p) p.count++;
+    });
+    getAllActiveHunts(now).forEach((h) => {
+      const p = byKey.get(normalizePseudo(h.player));
+      if (p) p.hunts++;
+    });
+
+    return Array.from(byKey.values()).sort(
+      (x, y) => y.count - x.count || y.hunts - x.hunts || x.name.localeCompare(y.name, "fr", { sensitivity: "base" })
+    );
+  }
+
+  function buildPlayersBubbleHtml(devUser, now, collapsedMap) {
+    const players = getKnownPlayers(now);
+    const meKey = normalizePseudo(devUser);
+    const selected = selectedPlayerKey ? players.find((p) => p.key === selectedPlayerKey) : null;
+
+    if (selected) {
+      const attacks = getAllAllianceAttacks(now).filter((a) => normalizePseudo(a.target) === selected.key);
+      const hunts = getAllActiveHunts(now).filter((h) => normalizePseudo(h.player) === selected.key);
+      const chain = getAttackTdcChain();
+      const huntChain = getHuntTdcChain();
+      const currentTdc = getPlayerTdc(selected.name);
+      let projected = null;
+      let projectedAt = -1;
+      let totalAnts = 0;
+      attacks.forEach((a) => {
+        const ch = chain.get(String(a.sig || a.id));
+        if (ch && ch.target.after != null && Number(a.arrivalAt || 0) >= projectedAt) {
+          projected = ch.target.after;
+          projectedAt = Number(a.arrivalAt || 0);
+        }
+        totalAnts += getAttackSentAnts(a);
+      });
+      hunts.forEach((h) => {
+        const ch = huntChain.get(String(h.sig || h.id));
+        if (ch && ch.after != null && Number(h.arrivalAt || 0) >= projectedAt) {
+          projected = ch.after;
+          projectedAt = Number(h.arrivalAt || 0);
+        }
+      });
+
+      const summaryHtml = `
+        <div class="fmz-gb-summary">
+          📐 TDC actuel : <b>${currentTdc ? formatNumber(currentTdc) + " cm²" : "inconnu"}</b>
+          ${projected != null && (attacks.length || hunts.length) ? ` · après tous les mouvements : <b>${formatNumber(projected)} cm²</b>` : ""}<br>
+          ⚔️ Attaques sur lui : <b>${attacks.length}</b> · 🐜 Total envoyé : <b>${formatNumber(totalAnts)}</b> · 🏹 Chasses : <b>${hunts.length}</b>
+        </div>
+      `;
+
+      const listHtml = !attacks.length
+        ? `<div class="fmz-gb-empty">Aucune attaque en cours sur ${esc(selected.name)}.</div>`
+        : attacks
+            .map((a) => {
+              const leftSec = Math.max(0, Math.ceil((Number(a.arrivalAt || 0) - now) / 1000));
+              const isCritical = leftSec <= 15 * 60;
+              const isWarn = leftSec <= 30 * 60;
+              const urgencyClass = isCritical ? "critical" : isWarn ? "warn" : "";
+              const sentAnts = getAttackSentAnts(a);
+              const defTdc = getAttackTdcSummary(a);
+              const atkTdc = getAttackerTdcSummary(a);
+              const arrivalTxt = a.arrivalLabel
+                ? esc(a.arrivalLabel)
+                : new Date(Number(a.arrivalAt || now)).toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" });
+              const meta = [`🕒 ${arrivalTxt}`];
+              if (a.targetKind) meta.push(esc(a.targetKind));
+              meta.push(sentAnts > 0 ? `🐜 ${formatNumber(sentAnts)}` : "🐜 effectif inconnu");
+              const tdcParts = [];
+              if (defTdc.hasTdc) {
+                tdcParts.push(
+                  defTdc.hasAnts
+                    ? `${esc(selected.name)} ${formatNumber(defTdc.beforeTdc)}→${formatNumber(defTdc.afterTdc)}`
+                    : `${esc(selected.name)} ${formatNumber(defTdc.beforeTdc)}`
+                );
+              }
+              if (atkTdc.hasTdc) {
+                tdcParts.push(
+                  atkTdc.hasAnts
+                    ? `${esc(a.attacker || "Attaquant")} ${formatNumber(atkTdc.beforeTdc)}→${formatNumber(atkTdc.afterTdc)}`
+                    : `${esc(a.attacker || "Attaquant")} ${formatNumber(atkTdc.beforeTdc)}`
+                );
+              }
+              const tdcSub = tdcParts.length ? `<div class="fmz-gb-tdc">📐 ${tdcParts.join(" · ")} cm²</div>` : "";
+              return `
+                <div class="fmz-gb-row ${isWarn ? "soon" : ""}">
+                  <div class="fmz-gb-row-top">
+                    <span>${isCritical ? "🚨" : "⚔️"} <b>${esc(a.attacker || "Inconnu")}</b></span>
+                    <span class="fmz-gb-cd ${urgencyClass}" data-cd="${a.arrivalAt}">${formatDuration(leftSec)}</span>
+                  </div>
+                  <div class="fmz-gb-sub">${meta.join(" · ")}</div>
+                  ${tdcSub}
+                </div>
+              `;
+            })
+            .join("");
+
+      const huntsListHtml = !hunts.length
+        ? `<div class="fmz-gb-empty">Aucune chasse en cours pour ${esc(selected.name)}.</div>`
+        : hunts
+            .slice()
+            .sort((x, y) => Number(x.arrivalAt || 0) - Number(y.arrivalAt || 0))
+            .map((h) => {
+              const leftSec = Math.max(0, Math.ceil((Number(h.arrivalAt || 0) - now) / 1000));
+              const tdcInfo = getHuntTdcSummary(h);
+              const areaLabel = h.area ? ` · +${formatNumber(h.area)} cm²` : "";
+              const tdcSub = tdcInfo.hasTdc
+                ? `📐 TDC avant : <b>${formatNumber(tdcInfo.beforeTdc)}</b> · après chasse : <b>${formatNumber(tdcInfo.afterTdc)}</b>`
+                : `📐 TDC inconnu`;
+              return `
+                <div class="fmz-gb-row">
+                  <div class="fmz-gb-row-top">
+                    <span>🏹 <b>${esc(selected.name)}</b>${areaLabel}</span>
+                    <span class="fmz-gb-cd" data-cd="${h.arrivalAt}">${formatDuration(leftSec)}</span>
+                  </div>
+                  <div class="fmz-gb-tdc">${tdcSub}</div>
+                </div>
+              `;
+            })
+            .join("");
+
+      const hasUrgent = attacks.some((a) => (Number(a.arrivalAt || 0) - now) <= 30 * 60 * 1000);
+
+      return `
+        <div id="fmz-gb-card">
+          <div class="fmz-gb-head">
+            <b>👤 ${esc(selected.name)}${selected.key === meKey ? " (moi)" : ""}</b>
+            <div class="fmz-gb-head-actions">
+              <button id="fmz-gb-pl-back" class="fmz-gb-btn" type="button" title="Retour à la liste">←</button>
+              <button id="fmz-gb-refresh" class="fmz-gb-btn" type="button" title="Rafraîchir maintenant">🔄</button>
+              <button id="fmz-gb-pl-close" class="fmz-gb-btn" type="button" title="Réduire">_</button>
+            </div>
+          </div>
+          <div class="fmz-gb-status-bar">
+            <span>${esc(syncStatus.label)}</span>
+            <a class="fmz-gb-link" href="${esc(SHORTCUT_LINKS.membersUrl)}">📋 Membres (TDC)</a>
+          </div>
+          ${summaryHtml}
+          ${renderSectionBlock(
+            "pl_attacks",
+            "⚔️ Attaques sur ce joueur",
+            attacks.length,
+            listHtml,
+            `danger ${hasUrgent ? "urgent" : ""}`,
+            !!collapsedMap.pl_attacks
+          )}
+          ${renderSectionBlock(
+            "pl_hunts",
+            "🏹 Chasses en cours",
+            hunts.length,
+            huntsListHtml,
+            "hunt",
+            !!collapsedMap.pl_hunts
+          )}
+        </div>
+      `;
+    }
+
+    const rowsHtml = !players.length
+      ? `<div class="fmz-gb-empty">Aucun joueur connu (ouvre la page Membres pour scanner).</div>`
+      : players
+          .map((p) => {
+            const tdc = getPlayerTdc(p.name);
+            const isMe = p.key === meKey;
+            return `
+              <button class="fmz-gb-player ${isMe ? "me" : ""} ${p.count > 0 ? "attacked" : ""}" data-pl-select="${esc(p.key)}" type="button">
+                <span><b>${esc(p.name)}</b>${isMe ? " (moi)" : ""}${tdc ? `<span class="fmz-gb-player-tdc">${formatNumber(tdc)} cm²</span>` : ""}</span>
+                <span style="display:flex;gap:4px;align-items:center">
+                  ${p.hunts > 0 ? `<span class="fmz-gb-badge" title="Chasses en cours">🏹 ${p.hunts}</span>` : ""}
+                  <span class="fmz-gb-badge ${p.count > 0 ? "alert" : ""}" title="Attaques en cours sur ce joueur">${p.count}</span>
+                </span>
+              </button>
+            `;
+          })
+          .join("");
+
+    return `
+      <div id="fmz-gb-card">
+        <div class="fmz-gb-head">
+          <b>👤 Joueurs · ${players.length}</b>
+          <div class="fmz-gb-head-actions">
+            <button id="fmz-gb-refresh" class="fmz-gb-btn" type="button" title="Rafraîchir maintenant">🔄</button>
+            <button id="fmz-gb-pl-close" class="fmz-gb-btn" type="button" title="Réduire">_</button>
+          </div>
+        </div>
+        <div class="fmz-gb-status-bar">
+          <span>${esc(syncStatus.label)}</span>
+          <span>Clique un joueur pour voir ses attaques</span>
+        </div>
+        ${rowsHtml}
+      </div>
+    `;
+  }
+
   function renderGlobalBubble() {
     if (!document.body) return;
     injectGlobalBubbleStyles();
@@ -2539,6 +2885,7 @@
     const isConvoyOpen = isConvoyBubbleOpen();
     const isAllianceOpen = isAllianceBubbleOpen();
     const isStatsOpen = isStatsBubbleOpen();
+    const isPlayersOpen = isPlayersBubbleOpen();
     const collapsedMap = getCollapsedSections();
 
     let leftDock = document.getElementById("fmz-gb-left-dock");
@@ -2586,6 +2933,8 @@
 
     if (isStatsOpen) {
       cardHtml = buildStatsBubbleHtml(devUser, now, collapsedMap);
+    } else if (isPlayersOpen) {
+      cardHtml = buildPlayersBubbleHtml(devUser, now, collapsedMap);
     } else if (isAllianceOpen) {
       cardHtml = buildAllianceBubbleHtml(devUser, now, collapsedMap);
     } else if (isConvoyOpen) {
@@ -2764,6 +3113,9 @@
     root.innerHTML = `
       ${cardHtml}
       <div class="fmz-gb-dock">
+        <button id="fmz-gb-players-fab" class="fmz-gb-fab players ${isPlayersOpen ? "active" : ""}" type="button" title="Attaques par joueur">
+          <span>👤</span>
+        </button>
         <button id="fmz-gb-alliance-fab" class="fmz-gb-fab alliance ${isAllianceOpen ? "active" : ""} ${allAllianceAttacks.length > 0 ? "alert" : ""}" type="button" title="Toutes les attaques de l'alliance">
           <span>🛡️ Alliance</span>
           <span class="fmz-gb-pill">${allAllianceAttacks.length}</span>
@@ -2785,6 +3137,7 @@
         const next = !isStatsBubbleOpen();
         setStatsBubbleOpen(next);
         if (next) {
+          setPlayersBubbleOpen(false);
           setGlobalBubbleOpen(false);
           setConvoyBubbleOpen(false);
           setAllianceBubbleOpen(false);
@@ -2793,10 +3146,46 @@
       };
     }
 
+    root.querySelector("#fmz-gb-players-fab").onclick = () => {
+      const next = !isPlayersBubbleOpen();
+      setPlayersBubbleOpen(next);
+      if (next) {
+        setGlobalBubbleOpen(false);
+        setConvoyBubbleOpen(false);
+        setAllianceBubbleOpen(false);
+        setStatsBubbleOpen(false);
+      }
+      renderGlobalBubble();
+    };
+
+    root.querySelectorAll("[data-pl-select]").forEach((btn) => {
+      btn.onclick = () => {
+        selectedPlayerKey = btn.getAttribute("data-pl-select") || "";
+        renderGlobalBubble();
+      };
+    });
+
+    const plBackBtn = root.querySelector("#fmz-gb-pl-back");
+    if (plBackBtn) {
+      plBackBtn.onclick = () => {
+        selectedPlayerKey = "";
+        renderGlobalBubble();
+      };
+    }
+
+    const closePlayersBtn = root.querySelector("#fmz-gb-pl-close");
+    if (closePlayersBtn) {
+      closePlayersBtn.onclick = () => {
+        setPlayersBubbleOpen(false);
+        renderGlobalBubble();
+      };
+    }
+
     root.querySelector("#fmz-gb-alliance-fab").onclick = () => {
       const next = !isAllianceBubbleOpen();
       setAllianceBubbleOpen(next);
       if (next) {
+        setPlayersBubbleOpen(false);
         setGlobalBubbleOpen(false);
         setConvoyBubbleOpen(false);
         setStatsBubbleOpen(false);
@@ -2808,6 +3197,7 @@
       const next = !isGlobalBubbleOpen();
       setGlobalBubbleOpen(next);
       if (next) {
+        setPlayersBubbleOpen(false);
         setConvoyBubbleOpen(false);
         setAllianceBubbleOpen(false);
         setStatsBubbleOpen(false);
@@ -2819,6 +3209,7 @@
       const next = !isConvoyBubbleOpen();
       setConvoyBubbleOpen(next);
       if (next) {
+        setPlayersBubbleOpen(false);
         setGlobalBubbleOpen(false);
         setAllianceBubbleOpen(false);
         setStatsBubbleOpen(false);
@@ -3000,6 +3391,7 @@
       e.key === STORAGE_KEYS.convoyBubbleOpen ||
       e.key === STORAGE_KEYS.allianceBubbleOpen ||
       e.key === STORAGE_KEYS.statsBubbleOpen ||
+      e.key === STORAGE_KEYS.playersBubbleOpen ||
       e.key === STORAGE_KEYS.bubbleSections ||
       e.key === STORAGE_KEYS.allianceTdc ||
       e.key === STORAGE_KEYS.allianceStats
