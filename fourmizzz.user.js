@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Le Dôme De La Paix - Fourmizzz S5 (Ressources, Armee & Commerce)
 // @namespace    https://s5.fourmizzz.fr/
-// @version      0.5.46-worker
+// @version      0.5.49-worker
 // @updateURL    https://raw.githubusercontent.com/LDDLP/applizze-script/main/fourmizzz.user.js
 // @downloadURL  https://raw.githubusercontent.com/LDDLP/applizze-script/main/fourmizzz.user.js
 // @description  Outils d'alliance centralisés sur S5 : chasses en tête du Dôme avec TDC + chassé, attaques compactes avec filtres et tri, TDC attaquant/cible, règle 50%-300% / 20% max et convois.
@@ -20,7 +20,7 @@
   const HOST = window.location.hostname.toLowerCase();
   if (HOST !== "s5.fourmizzz.fr") return;
 
-  const SCRIPT_VERSION = "0.5.46-worker";
+  const SCRIPT_VERSION = "0.5.49-worker";
 
   const PATH = window.location.pathname.toLowerCase();
   const HREF = window.location.href.toLowerCase();
@@ -2166,7 +2166,10 @@
 
   function reqDelivered(r) {
     return (r.deliveries || []).reduce(
-      (t, d) => ({ wood: t.wood + (d.wood || 0), apples: t.apples + (d.apples || 0) }),
+      (t, d) => ({
+        wood: t.wood + Math.max(0, Number(d && d.wood) || 0),
+        apples: t.apples + Math.max(0, Number(d && d.apples) || 0)
+      }),
       { wood: 0, apples: 0 }
     );
   }
@@ -2174,8 +2177,8 @@
   function reqRemaining(r) {
     const del = reqDelivered(r);
     return {
-      wood: Math.max(0, (r.wood || 0) - del.wood),
-      apples: Math.max(0, (r.apples || 0) - del.apples)
+      wood: Math.max(0, (Number(r && r.wood) || 0) - del.wood),
+      apples: Math.max(0, (Number(r && r.apples) || 0) - del.apples)
     };
   }
 
@@ -2211,6 +2214,75 @@
   function clampNonNegativeInt(raw) {
     const n = Math.floor(Number(raw || 0));
     return Number.isFinite(n) && n > 0 ? n : 0;
+  }
+
+  function extractResourceAmounts(lineText, containerEl = null) {
+    const text = String(lineText || "");
+    let wood = 0;
+    let apples = 0;
+
+    const woodPatterns = [
+      /([\d\s\u00a0.,]+)\s*(?:🪵|bois\b|mat[ée]riaux?\b)/gi,
+      /(?:🪵|bois\b|mat[ée]riaux?)\s*[:x×-]?\s*([\d\s\u00a0.,]+)/gi
+    ];
+    const applePatterns = [
+      /([\d\s\u00a0.,]+)\s*(?:🍎|pommes?\b|nourriture\b)/gi,
+      /(?:🍎|pommes?\b|nourriture)\s*[:x×-]?\s*([\d\s\u00a0.,]+)/gi
+    ];
+
+    for (const re of woodPatterns) {
+      let m;
+      while ((m = re.exec(text)) !== null) {
+        const n = parseLeadingFrNumber(m[1]);
+        if (n !== null && n > wood) wood = Math.floor(n);
+      }
+    }
+
+    for (const re of applePatterns) {
+      let m;
+      while ((m = re.exec(text)) !== null) {
+        const n = parseLeadingFrNumber(m[1]);
+        if (n !== null && n > apples) apples = Math.floor(n);
+      }
+    }
+
+    if (wood === 0 && apples === 0 && containerEl) {
+      const imgs = Array.from(containerEl.querySelectorAll("img"));
+      for (const img of imgs) {
+        const src = String(img.getAttribute("src") || img.alt || "").toLowerCase();
+        const nextText = (img.nextSibling && img.nextSibling.textContent) || "";
+        const prevText = (img.previousSibling && img.previousSibling.textContent) || "";
+        const qty = parseLeadingFrNumber(nextText) ?? parseLeadingFrNumber(prevText);
+        if (qty !== null && qty > 0) {
+          if (src.includes("bois") || src.includes("wood")) {
+            wood += Math.floor(qty);
+          } else if (src.includes("pomme") || src.includes("apple") || src.includes("food")) {
+            apples += Math.floor(qty);
+          }
+        }
+      }
+    }
+
+    if (wood === 0 && apples === 0) {
+      const nums = Array.from(text.matchAll(/\d{1,3}(?:[\s\u00a0]\d{3})+|\d+/g))
+        .map((m) => parseLeadingFrNumber(m[0]))
+        .filter((n) => n !== null && n > 0);
+      if (nums.length >= 2) {
+        wood = Math.floor(nums[0]);
+        apples = Math.floor(nums[1]);
+      } else if (nums.length === 1) {
+        const lower = text.toLowerCase();
+        const idxApple = lower.search(/pomme|🍎/);
+        const idxWood = lower.search(/bois|🪵/);
+        if (idxApple !== -1 && (idxWood === -1 || idxApple < idxWood)) {
+          apples = Math.floor(nums[0]);
+        } else {
+          wood = Math.floor(nums[0]);
+        }
+      }
+    }
+
+    return { wood, apples };
   }
 
   function queuePendingCommerceFill(payload) {
@@ -2368,7 +2440,7 @@
 
     for (let i = 0; i < lines.length; i++) {
       let line = lines[i].replace(/^-+\s*/, "");
-      if (!/(?:vous\s+allez\s+livrer|convoi\s+vers|livraison\s+(?:vers|à|a))/i.test(line)) continue;
+      if (!/(?:vous\s+allez\s+livrer|vous\s+allez\s+recevoir|convoi\s+vers|livraison\s+(?:vers|à|a))/i.test(line)) continue;
 
       if (!/\bdans\s+/i.test(line) && i + 1 < lines.length && /\bdans\s+/i.test(lines[i + 1])) {
         line = `${line} ${lines[i + 1].trim()}`;
@@ -2377,55 +2449,44 @@
       const remSec = parseRemainingSeconds(line);
       if (remSec === null || remSec <= 0) continue;
 
+      const isIncoming = /vous\s+allez\s+recevoir/i.test(line);
       const m = line.match(
-        /(?:vous\s+allez\s+livrer|livraison)\s+(.+?)\s+(?:à|a|vers)\s+([^\s]+(?:\s+[^\s]+)*?)\s+dans\s+/i
+        /(?:vous\s+allez\s+(?:livrer|recevoir)|livraison)\s+(.+?)\s+(?:à|a|vers|de|par)\s+([^\s]+(?:\s+[^\s]+)*?)\s+dans\s+/i
       );
       if (!m) continue;
 
       const resPart = m[1];
-      const destRaw = m[2].trim();
-      const destNorm = normalizePseudo(destRaw);
-      if (!destNorm) continue;
+      const peerRaw = m[2].trim();
+      const peerNorm = normalizePseudo(peerRaw);
+      if (!peerNorm) continue;
 
-      const appleMatch = resPart.match(/([\d\s\u00a0.,]+)\s*(?:🍎|pommes?|nourriture)/i);
-      const woodMatch = resPart.match(/([\d\s\u00a0.,]+)\s*(?:🪵|bois|mat[ée]riaux?)/i);
+      const fromName = isIncoming ? peerRaw : senderName;
+      const toName = isIncoming ? senderName : peerRaw;
+      const fromNorm = normalizePseudo(fromName);
+      const toNorm = normalizePseudo(toName);
 
-      let apples = appleMatch ? (parseFrInt(appleMatch[1]) || 0) : 0;
-      let wood = woodMatch ? (parseFrInt(woodMatch[1]) || 0) : 0;
-
-      if (apples === 0 && wood === 0) {
-        const nums = Array.from(resPart.matchAll(/\d{1,3}(?:[\s\u00a0]\d{3})+|\d+/g))
-          .map((x) => parseFrInt(x[0]) || 0)
-          .filter((n) => n > 0);
-        if (nums.length >= 2) {
-          apples = nums[0];
-          wood = nums[1];
-        } else if (nums.length === 1) {
-          apples = nums[0];
-        }
-      }
-
+      const { wood, apples } = extractResourceAmounts(resPart);
       if (apples <= 0 && wood <= 0) continue;
 
       const arrivalAt = computeArrivalTimestamp(remSec, now, existingArrivals);
       const minuteBucket = Math.round(arrivalAt / 60000);
-      const dedupeKey = `${normalizePseudo(senderName)}|${destNorm}|${wood}|${apples}|${minuteBucket}`;
+      const dedupeKey = `${fromNorm}|${toNorm}|${wood}|${apples}|${minuteBucket}`;
       if (seenKeys.has(dedupeKey)) continue;
       seenKeys.add(dedupeKey);
 
-      const id = `cv_${normalizePseudo(senderName)}_${destNorm}_${apples}_${wood}_${minuteBucket}`;
+      const id = `cv_${fromNorm}_${toNorm}_${apples}_${wood}_${minuteBucket}`;
 
       parsed.push({
         id,
         type: "convoy",
-        from: findPlayerByPseudo(senderName) || { name: senderName, x: 0, y: 0, va: 0 },
-        to: findPlayerByPseudo(destRaw) || { name: destRaw, x: 0, y: 0, va: 0 },
+        from: findPlayerByPseudo(fromName) || { name: fromName, x: 0, y: 0, va: 0 },
+        to: findPlayerByPseudo(toName) || { name: toName, x: 0, y: 0, va: 0 },
         duration: remSec,
         startAt: now,
         arrivalAt,
         wood,
         apples,
-        createdBy: senderName
+        createdBy: fromName
       });
     }
 
@@ -2466,19 +2527,22 @@
 
     let requestsChanged = false;
     for (const cv of newlyDetected) {
-      const destNorm = normalizePseudo(cv.to && cv.to.name);
+      const fromName = (cv.from && cv.from.name) || cv.createdBy || senderName;
+      const fromNorm = normalizePseudo(fromName);
+      const destName = (cv.to && cv.to.name) || "";
+      const destNorm = normalizePseudo(destName);
       const pendingMatch = consumePendingConvoyMatch(destNorm);
 
       let matchingReq = null;
       if (pendingMatch && pendingMatch.requestId) {
         matchingReq = convoyRequests.find(
-          (r) => r && r.id === pendingMatch.requestId && r.status !== "done" && !isOwnRequest(r, senderName)
+          (r) => r && r.id === pendingMatch.requestId && r.status !== "done" && !isOwnRequest(r, fromName)
         );
       }
 
       if (!matchingReq) {
         matchingReq = convoyRequests
-          .filter((r) => r && r.status !== "done" && normalizePseudo(r.player) === destNorm && !isOwnRequest(r, senderName))
+          .filter((r) => r && r.status !== "done" && normalizePseudo(r.player) === destNorm && !isOwnRequest(r, fromName))
           .sort((a, b) => Number(a.createdAt || 0) - Number(b.createdAt || 0))
           .find((r) => {
             const rem = reqRemaining(r);
@@ -2496,7 +2560,7 @@
 
         cv.requestId = matchingReq.id;
         const delivery = {
-          by: senderName,
+          by: fromName,
           loggedBy: senderName,
           wood: appliedWood > 0 ? appliedWood : cv.wood,
           apples: appliedApples > 0 ? appliedApples : cv.apples,
@@ -2527,7 +2591,7 @@
 
       const alreadyLogged = convoyLog.some(
         (item) =>
-          normalizePseudo(item.from) === senderNorm &&
+          normalizePseudo(item.from) === fromNorm &&
           normalizePseudo(item.to) === destNorm &&
           Number(item.wood || 0) === Number(cv.wood || 0) &&
           Number(item.apples || 0) === Number(cv.apples || 0) &&
@@ -2535,8 +2599,8 @@
       );
       if (!alreadyLogged) {
         convoyLog.push({
-          from: senderName,
-          to: (cv.to && cv.to.name) || "Destinataire",
+          from: fromName,
+          to: destName || "Destinataire",
           wood: cv.wood,
           apples: cv.apples,
           requestId: cv.requestId || "",
