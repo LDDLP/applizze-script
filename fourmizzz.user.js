@@ -1,10 +1,10 @@
 // ==UserScript==
 // @name         Le Dôme De La Paix - Fourmizzz S5 (Ressources, Armee & Commerce)
 // @namespace    https://s5.fourmizzz.fr/
-// @version      0.5.42-worker
+// @version      0.5.43-worker
 // @updateURL    https://raw.githubusercontent.com/LDDLP/applizze-script/main/fourmizzz.user.js
 // @downloadURL  https://raw.githubusercontent.com/LDDLP/applizze-script/main/fourmizzz.user.js
-// @description  Outils d'alliance centralisés sur S5 : chasses en tête du Dôme avec TDC + chassé, attaques compactes avec filtres, TDC attaquant/cible, règle 50%-300% / 20% max et convois.
+// @description  Outils d'alliance centralisés sur S5 : chasses en tête du Dôme avec TDC + chassé, attaques compactes avec filtres et tri, TDC attaquant/cible, règle 50%-300% / 20% max et convois.
 // @match        *://s5.fourmizzz.fr/*
 // @run-at       document-end
 // @grant        GM_xmlhttpRequest
@@ -20,7 +20,7 @@
   const HOST = window.location.hostname.toLowerCase();
   if (HOST !== "s5.fourmizzz.fr") return;
 
-  const SCRIPT_VERSION = "0.5.42-worker";
+  const SCRIPT_VERSION = "0.5.43-worker";
 
   const PATH = window.location.pathname.toLowerCase();
   const HREF = window.location.href.toLowerCase();
@@ -79,6 +79,41 @@
     }
   };
 
+  const UNIT_STATS = {
+    "jeune soldate naine": { life: 8, atk: 3, def: 2 },
+    "soldate naine": { life: 10, atk: 5, def: 4 },
+    "naine d'élite": { life: 13, atk: 7, def: 6 },
+    "jeune soldate": { life: 16, atk: 10, def: 9 },
+    "soldate": { life: 20, atk: 15, def: 14 },
+    "concierge": { life: 30, atk: 1, def: 25 },
+    "artilleuse": { life: 10, atk: 30, def: 15 },
+    "artilleuse d'élite": { life: 12, atk: 35, def: 18 },
+    "soldate d'élite": { life: 27, atk: 24, def: 23 },
+    "tank": { life: 35, atk: 55, def: 1 },
+    "tueuse": { life: 50, atk: 50, def: 50 },
+    "tueuse d'élite": { life: 55, atk: 55, def: 55 }
+  };
+
+  const PREDATOR_STATS = [
+    { name: "Petite araignée", atk: 13, life: 50, food: 18.5 },
+    { name: "Araignée", atk: 19, life: 75, food: 27.4 },
+    { name: "Chenille", atk: 30, life: 100, food: 39.8 },
+    { name: "Criquet", atk: 42, life: 100, food: 47.1 },
+    { name: "Guèpe", atk: 50, life: 140, food: 60.8 },
+    { name: "Cigale", atk: 70, life: 200, food: 86 },
+    { name: "Abeille", atk: 115, life: 220, food: 115.7 },
+    { name: "Dionée", atk: 70, life: 700, food: 161 },
+    { name: "Hanneton", atk: 140, life: 450, food: 182.6 },
+    { name: "Scarabée", atk: 230, life: 1000, food: 348.8 },
+    { name: "Mante religieuse", atk: 1200, life: 800, food: 712.6 },
+    { name: "Lezard", atk: 700, life: 5000, food: 1361 },
+    { name: "Souris", atk: 1400, life: 5000, food: 1924 },
+    { name: "Mulot", atk: 3000, life: 8000, food: 3563 },
+    { name: "Alouette", atk: 10000, life: 30000, food: 12597 },
+    { name: "Rat", atk: 50000, life: 100000, food: 51426 },
+    { name: "Tamanoir", atk: 1000000, life: 5000000, food: 1626231 }
+  ];
+
   let promptedThisLoad = false;
   let cachedWorkerToken = "";
   let loginPromise = null;
@@ -89,6 +124,7 @@
   let lastSyncUpdatedAt = 0;
   let syncStatus = { state: "idle", label: "Prêt", at: 0 };
   let allianceAttackFilter = "all";
+  let allianceAttackSort = "time";
   let selectedPlayerKey = "";
   let updateAvailableInfo = { available: false, remoteVersion: "" };
 
@@ -359,90 +395,6 @@
     return cleaned;
   }
 
-  function isMembersPageView() {
-    if (!PATH.includes("alliance.php")) return false;
-    const bodyText = document.body ? document.body.innerText : "";
-    const hasMembersTitle = /membres/i.test(bodyText) || SEARCH.includes("membres") || HREF.includes("membres");
-    if (!hasMembersTitle) return false;
-    if (OWN_ALLIANCE_TAG && !new RegExp(`\\b${OWN_ALLIANCE_TAG}\\b`, "i").test(bodyText)) {
-      return false;
-    }
-    return /\bpseudo\b/i.test(bodyText) && (/\bterrain\b/i.test(bodyText) || /\btdc\b/i.test(bodyText));
-  }
-
-  function scrapeAllianceMembersTdc() {
-    if (!document.body || !isMembersPageView()) return 0;
-    const map = cleanAllianceTdcMap();
-    const now = Date.now();
-    let count = 0;
-
-    const tables = Array.from(document.querySelectorAll("table"));
-    for (const tbl of tables) {
-      if (tbl.closest && (tbl.closest("#fmz-gb-root") || tbl.closest("#fmz-gb-left-dock"))) continue;
-      const rows = Array.from(tbl.rows || []);
-      if (rows.length < 2) continue;
-
-      let pseudoColIdx = -1;
-      let terrainColIdx = -1;
-
-      const headerCells = Array.from(rows[0].cells || []).map((c) =>
-        (c.innerText || "").replace(/\s+/g, " ").trim().toLowerCase()
-      );
-      headerCells.forEach((h, idx) => {
-        if (h.includes("pseudo") || h.includes("joueur") || h.includes("membre")) {
-          if (pseudoColIdx === -1) pseudoColIdx = idx;
-        }
-        if (h.includes("terrain") || h.includes("tdc") || h.includes("cm²") || h.includes("cm2")) {
-          if (terrainColIdx === -1) terrainColIdx = idx;
-        }
-      });
-
-      if (pseudoColIdx === -1 || terrainColIdx === -1) continue;
-
-      for (let i = 1; i < rows.length; i++) {
-        const cells = Array.from(rows[i].cells || []);
-        if (cells.length <= Math.max(pseudoColIdx, terrainColIdx)) continue;
-
-        const rawPseudo = (cells[pseudoColIdx].innerText || "").replace(/\s+/g, " ").trim();
-        const rawTerrain = (cells[terrainColIdx].innerText || "").replace(/\s+/g, " ").trim();
-
-        const norm = normalizePseudo(rawPseudo);
-        const tdcVal = parseLeadingFrNumber(rawTerrain);
-        if (!norm || !Number.isFinite(tdcVal) || tdcVal <= 0) continue;
-
-        if (!isKnownAllianceMemberName(rawPseudo)) continue;
-
-        map[norm] = {
-          pseudo: rawPseudo,
-          tdc: Math.floor(tdcVal),
-          alliance: OWN_ALLIANCE_TAG,
-          source: "alliance_page",
-          updatedAt: now
-        };
-        count++;
-      }
-    }
-
-    if (count > 0) {
-      map._lastScanAt = now;
-      writeAllianceTdcMap(map);
-      const statsPayload = computeAndStoreAllianceStatsFromMap(map, now);
-      const playersList = Object.entries(map)
-        .filter(([k, v]) => k && !k.startsWith("_") && LDDLP_KEYS.has(k) && v && v.tdc > 0)
-        .map(([, v]) => ({
-          name: playerDisplayName(v.pseudo),
-          pseudo: playerDisplayName(v.pseudo),
-          tdc: Math.floor(v.tdc),
-          alliance: OWN_ALLIANCE_TAG
-        }));
-      syncWithWorker({ kind: "players", alliance: OWN_ALLIANCE_TAG, players: playersList }, "lddlp_players");
-      if (statsPayload) {
-        syncWithWorker({ kind: "stats", alliance: OWN_ALLIANCE_TAG, stats: statsPayload }, "lddlp_stats");
-      }
-    }
-    return count;
-  }
-
   function ingestRemotePlayersTdc(remotePlayers) {
     if (!Array.isArray(remotePlayers) || !remotePlayers.length) return;
     const map = readAllianceTdcMap();
@@ -512,6 +464,89 @@
       beforeTdc: baseTdc,
       afterTdc,
       gainedTdc
+    };
+  }
+
+  function estimateHuntDurationSec(areaVal) {
+    const cleanArea = Math.max(0, Number(areaVal) || 0);
+    if (cleanArea <= 0) return 0;
+
+    const benchmarks = readJsonArray(STORAGE_KEYS.huntBenchmarks);
+    const validBench = benchmarks.filter((b) => b && Number(b.area) > 0 && Number(b.durationSec) > 0);
+    if (validBench.length > 0) {
+      const nearest = validBench
+        .slice()
+        .sort((a, b) => Math.abs(Number(a.area) - cleanArea) - Math.abs(Number(b.area) - cleanArea))[0];
+      return Math.max(60, Math.round((cleanArea / Number(nearest.area)) * Number(nearest.durationSec)));
+    }
+
+    const history = readJsonArray(STORAGE_KEYS.huntHistory).filter(
+      (h) => h && Number(h.area) > 0 && Number(h.firstSeenAt || h.detectedAt) > 0 && Number(h.finishedAt || h.arrivalAt) > 0
+    );
+    if (history.length > 0) {
+      const h0 = history[0];
+      const dur0 = Math.max(60, Math.round((Number(h0.finishedAt || h0.arrivalAt) - Number(h0.firstSeenAt || h0.detectedAt)) / 1000));
+      return Math.max(60, Math.round((cleanArea / Number(h0.area)) * dur0));
+    }
+
+    return Math.round(82000 + cleanArea * 4.5);
+  }
+
+  function simulateHuntCombat({ jsnCount = 100000, weaponLvl = 0, shieldLvl = 0, enemies = [] }) {
+    const atkMult = 1 + 0.1 * Math.max(0, Number(weaponLvl) || 0);
+    const shieldMult = 1 + 0.1 * Math.max(0, Number(shieldLvl) || 0);
+    const baseLifePerJsn = UNIT_STATS["jeune soldate naine"].life;
+    const baseAtkPerJsn = UNIT_STATS["jeune soldate naine"].atk;
+
+    let aliveJsn = Math.max(0, Math.floor(Number(jsnCount) || 0));
+    const activeEnemies = (enemies || []).map((e) => ({
+      name: e.name,
+      count: Math.max(0, Math.floor(Number(e.count) || 0)),
+      hpEach: Number(e.life) || 50,
+      atkEach: Number(e.atk) || 13,
+      foodEach: Number(e.food) || 0
+    }));
+
+    let totalHpPool = activeEnemies.reduce((s, e) => s + e.count * e.hpEach, 0);
+    let deadJsnTotal = 0;
+    let rounds = 0;
+    let foodGained = 0;
+
+    while (aliveJsn > 0 && totalHpPool > 0 && rounds < 25) {
+      rounds++;
+      const dmgDealt = Math.floor(aliveJsn * baseAtkPerJsn * atkMult);
+      const enemiesBefore = activeEnemies.reduce((s, e) => s + e.count, 0);
+      const hpBeforeRound = Math.max(1, totalHpPool);
+      totalHpPool = Math.max(0, totalHpPool - dmgDealt);
+
+      const enemiesAfter = enemiesBefore > 0
+        ? Math.max(0, Math.floor(enemiesBefore * (totalHpPool / hpBeforeRound)))
+        : 0;
+
+      const killedThisRound = Math.max(0, enemiesBefore - enemiesAfter);
+      if (activeEnemies.length > 0 && killedThisRound > 0) {
+        const share = killedThisRound / Math.max(1, enemiesBefore);
+        activeEnemies.forEach((e) => {
+          const k = Math.min(e.count, Math.round(e.count * share));
+          e.count -= k;
+          foodGained += k * e.foodEach;
+        });
+      }
+
+      const rawEnemyDmg = activeEnemies.reduce((s, e) => s + e.count * e.atkEach, 0);
+      const effectiveLifePerJsn = baseLifePerJsn * shieldMult;
+      const deathsThisRound = Math.min(aliveJsn, Math.floor(rawEnemyDmg / effectiveLifePerJsn));
+
+      aliveJsn -= deathsThisRound;
+      deadJsnTotal += deathsThisRound;
+    }
+
+    return {
+      won: aliveJsn > 0 && totalHpPool <= 0,
+      rounds,
+      aliveJsn,
+      deadJsn: deadJsnTotal,
+      foodGained: Math.round(foodGained)
     };
   }
 
@@ -690,7 +725,8 @@
         taken: 0,
         maxSteal20: null,
         willFail: false,
-        failReason: ""
+        failReason: "",
+        ratioPct: ev.ratioPct
       };
     }
     return {
@@ -702,7 +738,8 @@
       taken: ev.taken,
       maxSteal20: ev.maxSteal20,
       willFail: ev.willFail,
-      failReason: ev.failReason
+      failReason: ev.failReason,
+      ratioPct: ev.ratioPct
     };
   }
 
@@ -718,7 +755,8 @@
         sentAnts: ev.ants,
         taken: 0,
         willFail: false,
-        failReason: ""
+        failReason: "",
+        ratioPct: ev.ratioPct
       };
     }
     return {
@@ -729,7 +767,8 @@
       sentAnts: ev.ants,
       taken: ev.taken,
       willFail: ev.willFail,
-      failReason: ev.failReason
+      failReason: ev.failReason,
+      ratioPct: ev.ratioPct
     };
   }
 
@@ -1444,6 +1483,89 @@
 
     return true;
   }
+  function isMembersPageView() {
+    if (!PATH.includes("alliance.php")) return false;
+    const bodyText = document.body ? document.body.innerText : "";
+    const hasMembersTitle = /membres/i.test(bodyText) || SEARCH.includes("membres") || HREF.includes("membres");
+    if (!hasMembersTitle) return false;
+    if (OWN_ALLIANCE_TAG && !new RegExp(`\\b${OWN_ALLIANCE_TAG}\\b`, "i").test(bodyText)) {
+      return false;
+    }
+    return /\bpseudo\b/i.test(bodyText) && (/\bterrain\b/i.test(bodyText) || /\btdc\b/i.test(bodyText));
+  }
+
+  function scrapeAllianceMembersTdc() {
+    if (!document.body || !isMembersPageView()) return 0;
+    const map = cleanAllianceTdcMap();
+    const now = Date.now();
+    let count = 0;
+
+    const tables = Array.from(document.querySelectorAll("table"));
+    for (const tbl of tables) {
+      if (tbl.closest && (tbl.closest("#fmz-gb-root") || tbl.closest("#fmz-gb-left-dock"))) continue;
+      const rows = Array.from(tbl.rows || []);
+      if (rows.length < 2) continue;
+
+      let pseudoColIdx = -1;
+      let terrainColIdx = -1;
+
+      const headerCells = Array.from(rows[0].cells || []).map((c) =>
+        (c.innerText || "").replace(/\s+/g, " ").trim().toLowerCase()
+      );
+      headerCells.forEach((h, idx) => {
+        if (h.includes("pseudo") || h.includes("joueur") || h.includes("membre")) {
+          if (pseudoColIdx === -1) pseudoColIdx = idx;
+        }
+        if (h.includes("terrain") || h.includes("tdc") || h.includes("cm²") || h.includes("cm2")) {
+          if (terrainColIdx === -1) terrainColIdx = idx;
+        }
+      });
+
+      if (pseudoColIdx === -1 || terrainColIdx === -1) continue;
+
+      for (let i = 1; i < rows.length; i++) {
+        const cells = Array.from(rows[i].cells || []);
+        if (cells.length <= Math.max(pseudoColIdx, terrainColIdx)) continue;
+
+        const rawPseudo = (cells[pseudoColIdx].innerText || "").replace(/\s+/g, " ").trim();
+        const rawTerrain = (cells[terrainColIdx].innerText || "").replace(/\s+/g, " ").trim();
+
+        const norm = normalizePseudo(rawPseudo);
+        const tdcVal = parseLeadingFrNumber(rawTerrain);
+        if (!norm || !Number.isFinite(tdcVal) || tdcVal <= 0) continue;
+
+        if (!isKnownAllianceMemberName(rawPseudo)) continue;
+
+        map[norm] = {
+          pseudo: rawPseudo,
+          tdc: Math.floor(tdcVal),
+          alliance: OWN_ALLIANCE_TAG,
+          source: "alliance_page",
+          updatedAt: now
+        };
+        count++;
+      }
+    }
+
+    if (count > 0) {
+      map._lastScanAt = now;
+      writeAllianceTdcMap(map);
+      const statsPayload = computeAndStoreAllianceStatsFromMap(map, now);
+      const playersList = Object.entries(map)
+        .filter(([k, v]) => k && !k.startsWith("_") && LDDLP_KEYS.has(k) && v && v.tdc > 0)
+        .map(([, v]) => ({
+          name: playerDisplayName(v.pseudo),
+          pseudo: playerDisplayName(v.pseudo),
+          tdc: Math.floor(v.tdc),
+          alliance: OWN_ALLIANCE_TAG
+        }));
+      syncWithWorker({ kind: "players", alliance: OWN_ALLIANCE_TAG, players: playersList }, "lddlp_players");
+      if (statsPayload) {
+        syncWithWorker({ kind: "stats", alliance: OWN_ALLIANCE_TAG, stats: statsPayload }, "lddlp_stats");
+      }
+    }
+    return count;
+  }
 
   function extractHuntsFromPage() {
     const now = Date.now();
@@ -1567,35 +1689,63 @@
     return nextHunts;
   }
 
+  function findHuntAreaInput() {
+    const inputs = Array.from(document.querySelectorAll("input[type='text'], input[type='number'], input:not([type])"))
+      .filter((el) => !(el.closest && (el.closest("#fmz-gb-root") || el.closest("#fmz-gb-left-dock"))));
+    for (const inp of inputs) {
+      const ctx = ((inp.parentElement && inp.parentElement.innerText) || "") + " " + (inp.name || "") + " " + (inp.id || "");
+      if (/cm(?:²|2)|terrain|superficie/i.test(ctx)) return inp;
+    }
+    return inputs[0] || null;
+  }
+
+  function updateAcquerirTerrainPreview() {
+    if (!IS_ACQUERIR_TERRAIN || !document.body) return;
+    const areaInp = findHuntAreaInput();
+    if (!areaInp) return;
+
+    let previewBox = document.getElementById("fmz-hunt-live-preview");
+    if (!previewBox) {
+      previewBox = document.createElement("div");
+      previewBox.id = "fmz-hunt-live-preview";
+      previewBox.style.cssText =
+        "margin-top:8px;padding:8px 10px;background:#111827;color:#f3f4f6;border:1px solid #4b5563;border-radius:8px;font-size:12px;line-height:1.45;";
+      areaInp.insertAdjacentElement("afterend", previewBox);
+      areaInp.addEventListener("input", updateAcquerirTerrainPreview);
+      areaInp.addEventListener("change", updateAcquerirTerrainPreview);
+    }
+
+    const areaVal = parseFrInt(areaInp.value) || 0;
+    const baseTdc = getPlayerTdc(getDevUser());
+
+    if (areaVal <= 0) {
+      previewBox.innerHTML =
+        `🎯 <b>Aperçu chasse :</b> saisis un terrain à conquérir pour voir le <b>TDC après chasse</b> et la <b>durée estimée</b>` +
+        (baseTdc ? ` (TDC actuel : <b>${formatNumber(baseTdc)} cm²</b>)` : "") +
+        `.`;
+      return;
+    }
+
+    const afterTdc = baseTdc ? baseTdc + areaVal : null;
+    const estSec = estimateHuntDurationSec(areaVal);
+    previewBox.innerHTML =
+      `🎯 <b>Aperçu chasse (+${formatNumber(areaVal)} cm²) :</b><br>` +
+      `• TDC : ${baseTdc ? `<b>${formatNumber(baseTdc)} → ${formatNumber(afterTdc)} cm²</b>` : `<i>TDC actuel inconnu (ouvre Membres)</i>`}<br>` +
+      `• Durée estimée : <b>${formatDuration(estSec)}</b>`;
+  }
+
   function setupAcquerirTerrainGuard() {
     if (!IS_ACQUERIR_TERRAIN || !document.body) return;
+    updateAcquerirTerrainPreview();
     if (document.body.dataset.fmzHuntGuardBound === "1") return;
     document.body.dataset.fmzHuntGuardBound = "1";
-
-    const findHuntAreaInput = () => {
-      const inputs = Array.from(document.querySelectorAll("input[type='text'], input[type='number'], input:not([type])"))
-        .filter((el) => !(el.closest && (el.closest("#fmz-gb-root") || el.closest("#fmz-gb-left-dock"))));
-      for (const inp of inputs) {
-        const ctx = ((inp.parentElement && inp.parentElement.innerText) || "") + " " + (inp.name || "") + " " + (inp.id || "");
-        if (/cm(?:²|2)|terrain|superficie/i.test(ctx)) return inp;
-      }
-      return inputs[0] || null;
-    };
 
     const readPlannedHuntDurationSec = (areaVal) => {
       const bodyText = document.body ? document.body.innerText : "";
       const durLine = bodyText.split(/\r?\n/).find((l) => /cette\s+chasse\s+durera/i.test(l));
       const parsedSec = durLine ? parseRemainingSeconds(durLine) : null;
       if (parsedSec && parsedSec > 0) return parsedSec;
-
-      const benchmarks = readJsonArray(STORAGE_KEYS.huntBenchmarks);
-      if (benchmarks.length && areaVal > 0) {
-        const best = benchmarks[0];
-        if (best && best.area > 0 && best.durationSec > 0) {
-          return Math.max(60, Math.round((areaVal / best.area) * best.durationSec));
-        }
-      }
-      return 60;
+      return estimateHuntDurationSec(areaVal) || 60;
     };
 
     const checkHuntImpact = (areaVal) => {
@@ -1979,6 +2129,7 @@
 
     return nextAttacks;
   }
+
   function removeLegacyRessourcesPanel() {
     const oldPanel = document.getElementById("fmz-panel");
     if (oldPanel) oldPanel.remove();
@@ -2195,7 +2346,7 @@
 
     for (let i = 0; i < lines.length; i++) {
       let line = lines[i].replace(/^-+\s*/, "");
-      if (!/vous\s+allez\s+livrer\s+/i.test(line)) continue;
+      if (!/(?:vous\s+allez\s+livrer|convoi\s+vers|livraison\s+(?:vers|à|a))/i.test(line)) continue;
 
       if (!/\bdans\s+/i.test(line) && i + 1 < lines.length && /\bdans\s+/i.test(lines[i + 1])) {
         line = `${line} ${lines[i + 1].trim()}`;
@@ -2204,7 +2355,9 @@
       const remSec = parseRemainingSeconds(line);
       if (remSec === null || remSec <= 0) continue;
 
-      const m = line.match(/vous\s+allez\s+livrer\s+(.+?)\s+[àa]\s+([^\s]+(?:\s+[^\s]+)*?)\s+dans\s+/i);
+      const m = line.match(
+        /(?:vous\s+allez\s+livrer|livraison)\s+(.+?)\s+(?:à|a|vers)\s+([^\s]+(?:\s+[^\s]+)*?)\s+dans\s+/i
+      );
       if (!m) continue;
 
       const resPart = m[1];
@@ -2465,7 +2618,6 @@
       message: `✓ Convoi préparé vers ${destName}.`
     };
   }
-
   function injectGlobalBubbleStyles() {
     if (!document.body && !document.head) return;
     if (document.getElementById("fmz-global-bubble-style")) return;
@@ -2556,7 +2708,7 @@
         background:#1e3a8a !important;border-color:#3b82f6;color:#fff !important;
       }
       .fmz-gb-filters{
-        display:flex;gap:4px;margin-bottom:8px;
+        display:flex;gap:4px;margin-bottom:6px;
       }
       .fmz-gb-filter-btn{
         flex:1;background:#111827 !important;color:#cbd5e1 !important;
@@ -2608,6 +2760,7 @@
       .fmz-gb-cd.warn{color:#fde68a}
       .fmz-gb-sub{color:#9ca3af;font-size:11px;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
       .fmz-gb-tdc{color:#cbd5e1;font-size:11px;margin-top:2px}
+      .fmz-gb-rule{color:#86efac;font-size:11px;margin-top:2px}
       .fmz-gb-fail{color:#fbbf24;font-size:11px;font-weight:bold;margin-top:2px}
       .fmz-gb-empty{color:#9ca3af;font-size:11px}
       .fmz-gb-grid2{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:5px}
@@ -2818,11 +2971,22 @@
     const rawAttacks = getAllAllianceAttacks(now);
     const incomingCount = rawAttacks.filter((a) => samePseudo(a.target, devUser)).length;
     const outgoingCount = rawAttacks.filter((a) => samePseudo(a.attacker, devUser)).length;
-    const filteredAttacks = rawAttacks.filter((a) => {
-      if (allianceAttackFilter === "incoming") return samePseudo(a.target, devUser);
-      if (allianceAttackFilter === "outgoing") return samePseudo(a.attacker, devUser);
-      return true;
-    });
+    const filteredAttacks = rawAttacks
+      .filter((a) => {
+        if (allianceAttackFilter === "incoming") return samePseudo(a.target, devUser);
+        if (allianceAttackFilter === "outgoing") return samePseudo(a.attacker, devUser);
+        return true;
+      })
+      .sort((a, b) => {
+        if (allianceAttackSort === "tdc") {
+          const evA = getAttackEvaluation(a);
+          const evB = getAttackEvaluation(b);
+          const impactA = evA.willFail ? 0 : (evA.taken || 0);
+          const impactB = evB.willFail ? 0 : (evB.taken || 0);
+          if (impactB !== impactA) return impactB - impactA;
+        }
+        return Number(a.arrivalAt || 0) - Number(b.arrivalAt || 0);
+      });
 
     const hasUrgent = filteredAttacks.some((a) => (Number(a.arrivalAt || 0) - now) <= 30 * 60 * 1000);
 
@@ -2851,9 +3015,6 @@
             metaParts.push(`🕒 ${arrivalTxt}`);
             if (a.targetKind) metaParts.push(esc(a.targetKind));
             metaParts.push(sentAnts > 0 ? `🐜 ${formatNumber(sentAnts)}` : `🐜 effectif inconnu`);
-            if (!willFail && defTdc.maxSteal20 != null) {
-              metaParts.push(`max 20% : ${formatNumber(defTdc.maxSteal20)}`);
-            }
 
             const tdcParts = [];
             if (atkTdc.hasTdc) {
@@ -2874,9 +3035,14 @@
             const tdcSub = tdcParts.length
               ? `<div class="fmz-gb-tdc">📐 ${tdcParts.join(" · ")} cm²</div>`
               : "";
-            const failLine = willFail
-              ? `<div class="fmz-gb-fail">⚠️ Échec prévu : ${esc(defTdc.failReason)}</div>`
-              : "";
+
+            let ruleLine = "";
+            if (willFail) {
+              ruleLine = `<div class="fmz-gb-fail">⚠️ Hors plage 50%–300% (0 cm² pris) : ${esc(defTdc.failReason)}</div>`;
+            } else if (defTdc.hasTdc) {
+              const ratioTxt = defTdc.ratioPct != null ? ` · ratio ${defTdc.ratioPct}%` : "";
+              ruleLine = `<div class="fmz-gb-rule">🎯 Prise max : <b>${formatNumber(defTdc.taken)} cm²</b> (20% cible / effectif${ratioTxt})</div>`;
+            }
 
             return `
               <div class="fmz-gb-row ${isWarn ? "soon" : ""} ${isMeTarget ? "targeted-me" : ""} ${willFail ? "will-fail" : ""}">
@@ -2886,7 +3052,7 @@
                 </div>
                 <div class="fmz-gb-sub">${metaParts.join(" · ")}</div>
                 ${tdcSub}
-                ${failLine}
+                ${ruleLine}
               </div>
             `;
           })
@@ -2911,6 +3077,11 @@
           <button class="fmz-gb-filter-btn ${allianceAttackFilter === "all" ? "active" : ""}" data-al-filter="all" type="button">Tout (${rawAttacks.length})</button>
           <button class="fmz-gb-filter-btn ${allianceAttackFilter === "incoming" ? "active" : ""}" data-al-filter="incoming" type="button">Sur moi (${incomingCount})</button>
           <button class="fmz-gb-filter-btn ${allianceAttackFilter === "outgoing" ? "active" : ""}" data-al-filter="outgoing" type="button">Mes attaques (${outgoingCount})</button>
+        </div>
+
+        <div class="fmz-gb-filters">
+          <button class="fmz-gb-filter-btn ${allianceAttackSort === "time" ? "active" : ""}" data-al-sort="time" type="button">⏱️ Tri : Arrivée</button>
+          <button class="fmz-gb-filter-btn ${allianceAttackSort === "tdc" ? "active" : ""}" data-al-sort="tdc" type="button">📐 Tri : Impact TDC</button>
         </div>
 
         ${renderSectionBlock(
@@ -2944,9 +3115,10 @@
             const dr = convoyDrafts[r.id] || {};
             const wVal = dr.wood !== undefined ? dr.wood : rem.wood || 0;
             const aVal = dr.apples !== undefined ? dr.apples : rem.apples || 0;
-            const statusText = del.wood || del.apples
-              ? `Partielle · reste 🪵 ${formatNumber(rem.wood)} · 🍎 ${formatNumber(rem.apples)}`
-              : `Ouverte`;
+            const hasDelivered = del.wood > 0 || del.apples > 0;
+            const statusText = hasDelivered
+              ? `Livré 🪵 ${formatNumber(del.wood)} · 🍎 ${formatNumber(del.apples)} / Reste 🪵 ${formatNumber(rem.wood)} · 🍎 ${formatNumber(rem.apples)}`
+              : `Ouverte · Reste 🪵 ${formatNumber(rem.wood)} · 🍎 ${formatNumber(rem.apples)}`;
 
             const actionBlock = ownReq
               ? `<div class="fmz-gb-sub" style="color:#fca5a5">Votre demande personnelle</div>`
@@ -2954,18 +3126,19 @@
                 <div class="fmz-gb-grid2">
                   ${
                     rem.wood > 0
-                      ? `<div><label class="fmz-gb-lbl">🪵 Bois (max ${formatNumber(rem.wood)})</label><input class="fmz-gb-inp" data-cv-df="wood" data-cv-did="${esc(r.id)}" data-cv-max="${rem.wood}" type="number" min="0" max="${rem.wood}" value="${esc(wVal)}"></div>`
+                      ? `<div><label class="fmz-gb-lbl">🪵 Bois (reste ${formatNumber(rem.wood)})</label><input class="fmz-gb-inp" data-cv-df="wood" data-cv-did="${esc(r.id)}" data-cv-max="${rem.wood}" type="number" min="0" max="${rem.wood}" value="${esc(wVal)}"></div>`
                       : ""
                   }
                   ${
                     rem.apples > 0
-                      ? `<div><label class="fmz-gb-lbl">🍎 Pommes (max ${formatNumber(rem.apples)})</label><input class="fmz-gb-inp" data-cv-df="apples" data-cv-did="${esc(r.id)}" data-cv-max="${rem.apples}" type="number" min="0" max="${rem.apples}" value="${esc(aVal)}"></div>`
+                      ? `<div><label class="fmz-gb-lbl">🍎 Pommes (reste ${formatNumber(rem.apples)})</label><input class="fmz-gb-inp" data-cv-df="apples" data-cv-did="${esc(r.id)}" data-cv-max="${rem.apples}" type="number" min="0" max="${rem.apples}" value="${esc(aVal)}"></div>`
                       : ""
                   }
                 </div>
                 <div class="fmz-gb-actions">
+                  <button class="fmz-gb-btn" data-cv-act="half" data-cv-id="${esc(r.id)}" type="button">50%</button>
                   <button class="fmz-gb-btn accent" data-cv-act="max" data-cv-id="${esc(r.id)}" type="button">Max</button>
-                  <button class="fmz-gb-btn primary" data-cv-act="send" data-cv-id="${esc(r.id)}" type="button">🚚 Lancer convoi</button>
+                  <button class="fmz-gb-btn primary" data-cv-act="send" data-cv-id="${esc(r.id)}" type="button">🚚 Lancer</button>
                 </div>
               `;
 
@@ -2973,8 +3146,8 @@
               <div class="fmz-gb-row" data-cv-card="${esc(r.id)}">
                 <div class="fmz-gb-row-top">
                   <span><b>${esc(r.player)}</b> · 🪵 ${formatNumber(r.wood)} · 🍎 ${formatNumber(r.apples)}</span>
-                  <span class="fmz-gb-cd">${esc(statusText)}</span>
                 </div>
+                <div class="fmz-gb-tdc">${esc(statusText)}</div>
                 ${r.note ? `<div class="fmz-gb-sub">${esc(r.note)}</div>` : ""}
                 ${actionBlock}
               </div>
@@ -3142,8 +3315,15 @@
         const r = convoyRequests.find((item) => item.id === btn.dataset.cvId);
         if (!r) return;
         const act = btn.dataset.cvAct;
-        if (act === "max") {
-          const rem = reqRemaining(r);
+        const rem = reqRemaining(r);
+        if (act === "half") {
+          convoyDrafts[r.id] = {
+            wood: Math.floor(rem.wood * 0.5),
+            apples: Math.floor(rem.apples * 0.5)
+          };
+          lastCommerceMessage = `✓ 50% du reste sélectionné pour ${r.player}.`;
+          renderGlobalBubble();
+        } else if (act === "max") {
           convoyDrafts[r.id] = { wood: rem.wood, apples: rem.apples };
           lastCommerceMessage = `✓ Max sélectionné pour ${r.player}.`;
           renderGlobalBubble();
@@ -3206,6 +3386,7 @@
     if (selected) {
       const attacks = getAllAllianceAttacks(now).filter((a) => normalizePseudo(a.target) === selected.key);
       const hunts = getAllActiveHunts(now).filter((h) => normalizePseudo(h.player) === selected.key);
+      const playerConvoys = getConvoySummaryForUser(selected.name, now);
       const sim = getTdcChains();
       const currentTdc = getPlayerTdc(selected.name);
       const projected = sim.finalTdc && sim.finalTdc.has(selected.key) ? sim.finalTdc.get(selected.key) : null;
@@ -3221,7 +3402,8 @@
         <div class="fmz-gb-summary">
           📐 TDC actuel : <b>${currentTdc ? formatNumber(currentTdc) + " cm²" : "inconnu"}</b>
           ${projected != null && (attacks.length || hunts.length) ? ` · après tous les mouvements : <b>${formatNumber(projected)} cm²</b>` : ""}<br>
-          ⚔️ Attaques sur lui : <b>${attacks.length}</b> · 📉 TDC pris max (20%) : <b>${formatNumber(totalTaken)} cm²</b> · 🏹 Chasses : <b>${hunts.length}</b>
+          ⚔️ Attaques sur lui : <b>${attacks.length}</b> · 📉 TDC pris max (20%) : <b>${formatNumber(totalTaken)} cm²</b> · 🏹 Chasses : <b>${hunts.length}</b><br>
+          🚚 Convois entrants : <b>${playerConvoys.incoming.length}</b> · sortants : <b>${playerConvoys.outgoing.length}</b>
         </div>
       `;
 
@@ -3303,6 +3485,38 @@
             })
             .join("");
 
+      const convoyInHtml = !playerConvoys.incoming.length
+        ? `<div class="fmz-gb-empty">Aucun convoi entrant.</div>`
+        : playerConvoys.incoming
+            .map((c) => {
+              const leftSec = Math.max(0, Math.ceil((c.arrivalAt - now) / 1000));
+              return `
+                <div class="fmz-gb-row">
+                  <div class="fmz-gb-row-top">
+                    <span>De <b>${esc(c.fromName)}</b> · 🪵 ${formatNumber(c.wood)} · 🍎 ${formatNumber(c.apples)}</span>
+                    <span class="fmz-gb-cd" data-cd="${c.arrivalAt}">${formatDuration(leftSec)}</span>
+                  </div>
+                </div>
+              `;
+            })
+            .join("");
+
+      const convoyOutHtml = !playerConvoys.outgoing.length
+        ? `<div class="fmz-gb-empty">Aucun convoi sortant.</div>`
+        : playerConvoys.outgoing
+            .map((c) => {
+              const leftSec = Math.max(0, Math.ceil((c.arrivalAt - now) / 1000));
+              return `
+                <div class="fmz-gb-row">
+                  <div class="fmz-gb-row-top">
+                    <span>Vers <b>${esc(c.toName)}</b> · 🪵 ${formatNumber(c.wood)} · 🍎 ${formatNumber(c.apples)}</span>
+                    <span class="fmz-gb-cd" data-cd="${c.arrivalAt}">${formatDuration(leftSec)}</span>
+                  </div>
+                </div>
+              `;
+            })
+            .join("");
+
       const hasUrgent = attacks.some((a) => (Number(a.arrivalAt || 0) - now) <= 30 * 60 * 1000);
 
       return `
@@ -3335,6 +3549,22 @@
             huntsListHtml,
             "hunt",
             !!collapsedMap.pl_hunts
+          )}
+          ${renderSectionBlock(
+            "pl_convoy_in",
+            "📥 Convois entrants",
+            playerConvoys.incoming.length,
+            convoyInHtml,
+            "in",
+            !!collapsedMap.pl_convoy_in
+          )}
+          ${renderSectionBlock(
+            "pl_convoy_out",
+            "📤 Convois sortants",
+            playerConvoys.outgoing.length,
+            convoyOutHtml,
+            "out",
+            !!collapsedMap.pl_convoy_out
           )}
         </div>
       `;
@@ -3387,6 +3617,7 @@
     const allAllianceAttacks = getAllAllianceAttacks(now);
     const convoys = getConvoySummaryForUser(devUser, now);
     const allHunts = getAllActiveHunts(now);
+    const finishedHunts = readJsonArray(STORAGE_KEYS.huntHistory).slice(0, 8);
     const openRequestsCount = convoyRequests.filter((r) => r.status !== "done").length;
     const isDomeOpen = isGlobalBubbleOpen();
     const isConvoyOpen = isConvoyBubbleOpen();
@@ -3468,6 +3699,27 @@
             })
             .join("");
 
+      const finishedHuntsHtml = !finishedHunts.length
+        ? `<div class="fmz-gb-empty">Aucune chasse terminée enregistrée.</div>`
+        : finishedHunts
+            .map((h) => {
+              const startTs = Number(h.firstSeenAt || h.detectedAt || 0);
+              const endTs = Number(h.finishedAt || h.arrivalAt || 0);
+              const durTxt = startTs > 0 && endTs > startTs
+                ? ` · ⏱️ ${formatDuration(Math.round((endTs - startTs) / 1000))}`
+                : "";
+              const areaTxt = h.area ? `+${formatNumber(h.area)} cm²` : "Chasse";
+              return `
+                <div class="fmz-gb-row">
+                  <div class="fmz-gb-row-top">
+                    <span><b>${esc(h.player || devUser)}</b> · <b>${areaTxt}</b></span>
+                    <span class="fmz-gb-cd">Terminée${durTxt}</span>
+                  </div>
+                </div>
+              `;
+            })
+            .join("");
+
       const attacksHtml = !incomingAttacks.length
         ? `<div class="fmz-gb-empty">Aucune attaque en cours sur moi.</div>`
         : incomingAttacks
@@ -3498,15 +3750,12 @@
               const antsPart = sentAnts > 0
                 ? ` · 🐜 ${formatNumber(sentAnts)}`
                 : ` · 🐜 effectif inconnu`;
-              const maxPart = !willFail && tdcInfo.maxSteal20 != null
-                ? ` · max 20% : ${formatNumber(tdcInfo.maxSteal20)}`
-                : "";
               const tdcSub = tdcParts.length
-                ? `${tdcParts.join(" · ")} cm²${antsPart}${maxPart}`
+                ? `${tdcParts.join(" · ")} cm²${antsPart}`
                 : `TDC : <a class="fmz-gb-link" href="${esc(SHORTCUT_LINKS.membersUrl)}">Lire page Membres</a>${antsPart}`;
-              const failLine = willFail
-                ? `<div class="fmz-gb-fail">⚠️ Échec prévu : ${esc(tdcInfo.failReason)}</div>`
-                : "";
+              const ruleLine = willFail
+                ? `<div class="fmz-gb-fail">⚠️ Hors plage 50%–300% (0 cm² pris) : ${esc(tdcInfo.failReason)}</div>`
+                : (tdcInfo.hasTdc ? `<div class="fmz-gb-rule">🎯 Prise max : <b>${formatNumber(tdcInfo.taken)} cm²</b> (20% cible / effectif)</div>` : "");
               return `
                 <div class="fmz-gb-row ${isWarn ? "soon" : ""} targeted-me ${willFail ? "will-fail" : ""}">
                   <div class="fmz-gb-row-top">
@@ -3514,7 +3763,7 @@
                     <span class="fmz-gb-cd ${urgencyClass}" data-cd="${a.arrivalAt}">${formatDuration(leftSec)}</span>
                   </div>
                   <div class="fmz-gb-tdc">${tdcSub}</div>
-                  ${failLine}
+                  ${ruleLine}
                 </div>
               `;
             })
@@ -3623,6 +3872,15 @@
             outgoingConvoysHtml,
             "out",
             !!collapsedMap.convoy_out
+          )}
+
+          ${renderSectionBlock(
+            "hunt_hist",
+            "📜 Chasses terminées",
+            finishedHunts.length,
+            finishedHuntsHtml,
+            "",
+            collapsedMap.hunt_hist !== undefined ? !!collapsedMap.hunt_hist : true
           )}
         </div>
       `;
@@ -3738,6 +3996,13 @@
     root.querySelectorAll("[data-al-filter]").forEach((btn) => {
       btn.onclick = () => {
         allianceAttackFilter = btn.getAttribute("data-al-filter") || "all";
+        renderGlobalBubble();
+      };
+    });
+
+    root.querySelectorAll("[data-al-sort]").forEach((btn) => {
+      btn.onclick = () => {
+        allianceAttackSort = btn.getAttribute("data-al-sort") || "time";
         renderGlobalBubble();
       };
     });
@@ -3879,6 +4144,7 @@
     if (IS_HUNT_PAGE) {
       reconcileHunts();
       if (IS_ACQUERIR_TERRAIN) {
+        updateAcquerirTerrainPreview();
         setupAcquerirTerrainGuard();
       }
     } else if (IS_ATTACK_PAGE) {
