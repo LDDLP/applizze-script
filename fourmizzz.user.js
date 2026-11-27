@@ -20,7 +20,7 @@
   const HOST = window.location.hostname.toLowerCase();
   if (HOST !== "s5.fourmizzz.fr") return;
 
-  const SCRIPT_VERSION = "0.5.44-worker";
+  const SCRIPT_VERSION = "0.5.45-worker";
 
   const PATH = window.location.pathname.toLowerCase();
   const HREF = window.location.href.toLowerCase();
