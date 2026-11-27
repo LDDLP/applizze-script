@@ -1,10 +1,10 @@
 // ==UserScript==
 // @name         Le Dôme De La Paix - Fourmizzz S5 (Ressources, Armee & Commerce)
 // @namespace    https://s5.fourmizzz.fr/
-// @version      0.5.38-worker
+// @version      0.5.40-worker
 // @updateURL    https://raw.githubusercontent.com/LDDLP/applizze-script/main/fourmizzz.user.js
 // @downloadURL  https://raw.githubusercontent.com/LDDLP/applizze-script/main/fourmizzz.user.js
-// @description  Outils d'alliance centralisés sur S5 : chasses en tête du Dôme avec TDC + chassé, attaques compactes avec filtres et TDC attaquant/cible, statistiques sous MàJ script et convois.
+// @description  Outils d'alliance centralisés sur S5 : chasses en tête du Dôme avec TDC + chassé, attaques compactes avec filtres, TDC attaquant/cible, règle 50%-300% / 20% max et convois.
 // @match        *://s5.fourmizzz.fr/*
 // @grant        GM_xmlhttpRequest
 // @grant        GM_getValue
@@ -21,6 +21,8 @@
   const PATH = window.location.pathname.toLowerCase();
   const HREF = window.location.href.toLowerCase();
   const IS_RESSOURCES = PATH.includes("ressources.php");
+  const IS_ACQUERIR_TERRAIN = PATH.includes("acquerirterrain.php");
+  const IS_HUNT_PAGE = IS_RESSOURCES || IS_ACQUERIR_TERRAIN;
   const IS_ARMEE = PATH.includes("armee.php");
   const IS_ENNEMIE = PATH.includes("ennemie.php");
   const IS_ATTACK_PAGE = IS_ARMEE || IS_ENNEMIE;
@@ -102,7 +104,8 @@
     { name: "Atiraya", x: 68, y: 82, va: 0 },
     { name: "Ange", x: 25, y: 79, va: 0 },
     { name: "Hantiz", x: 84, y: 78, va: 0 },
-    { name: "Arktik22", x: 68, y: 1, va: 0 }
+    { name: "Arktik22", x: 68, y: 1, va: 0 },
+    { name: "gireg", x: 90, y: 40, va: 0 }
   ];
 
   function setSyncState(state, label) {
@@ -136,6 +139,7 @@
     if (changed) {
       setStoredToken("");
       setStoredPassword("");
+      promptedThisLoad = false;
       Object.keys(lastSentSig).forEach((k) => delete lastSentSig[k]);
       lastSyncUpdatedAt = 0;
       nextRetryAt = 0;
@@ -381,12 +385,10 @@
     return 0;
   }
 
-  let tdcChainCache = { at: 0, attacks: new Map(), hunts: new Map() };
-
-  function getTdcChains() {
-    const nowMs = Date.now();
-    if (nowMs - tdcChainCache.at < 500) return tdcChainCache;
-
+  // Règles Fourmizzz :
+  // 1) L'attaquant peut attaquer une cible dont le TDC est entre 50% et 300% de son propre TDC actuel.
+  // 2) Une attaque valide prend au maximum 20% du TDC actuel de la cible (plafonné par les fourmis envoyées).
+  function simulateTimeline(nowMs = Date.now(), extraHunts = []) {
     const running = new Map();
     const getRun = (pseudo) => {
       const k = normalizePseudo(pseudo);
@@ -397,15 +399,18 @@
 
     const events = [];
     const seen = new Set();
+
     getAllAllianceAttacks(nowMs).forEach((a) =>
       events.push({ kind: "attack", at: Number(a.arrivalAt || 0), item: a })
     );
-    getAllActiveHunts(nowMs).forEach((h) => {
+
+    getAllActiveHunts(nowMs).concat(extraHunts || []).forEach((h) => {
       const k = String(h.sig || h.id);
       if (seen.has(k)) return;
       seen.add(k);
       events.push({ kind: "hunt", at: Number(h.arrivalAt || 0), item: h });
     });
+
     events.sort((x, y) => x.at - y.at);
 
     const attacks = new Map();
@@ -417,13 +422,46 @@
         const ants = Math.max(0, getAttackSentAnts(a));
         const tBefore = getRun(a.target);
         const aBefore = getRun(a.attacker);
-        const taken = tBefore != null ? Math.min(ants, tBefore) : ants;
-        const tAfter = tBefore != null ? tBefore - taken : null;
+
+        let willFail = false;
+        let failReason = "";
+        let ratioPct = null;
+
+        if (tBefore != null && tBefore > 0 && aBefore != null && aBefore > 0) {
+          ratioPct = Math.round((tBefore / aBefore) * 100);
+          if (tBefore < aBefore * 0.5) {
+            willFail = true;
+            failReason = `cible trop petite (${ratioPct}% < 50%)`;
+          } else if (tBefore > aBefore * 3) {
+            willFail = true;
+            failReason = `cible trop grande (${ratioPct}% > 300%)`;
+          }
+        }
+
+        const maxSteal20 = tBefore != null && tBefore > 0 ? Math.floor(tBefore * 0.2) : null;
+        let taken = 0;
+        if (!willFail && tBefore != null && tBefore > 0) {
+          if (ants > 0) {
+            taken = Math.min(ants, maxSteal20);
+          } else {
+            taken = maxSteal20;
+          }
+        }
+
+        const tAfter = tBefore != null ? Math.max(0, tBefore - taken) : null;
         const aAfter = aBefore != null ? aBefore + taken : null;
+
         if (tBefore != null) running.set(normalizePseudo(a.target), tAfter);
         if (aBefore != null) running.set(normalizePseudo(a.attacker), aAfter);
+
         attacks.set(String(a.sig || a.id), {
+          item: a,
           ants,
+          taken,
+          maxSteal20,
+          willFail,
+          failReason,
+          ratioPct,
           target: { before: tBefore, after: tAfter },
           attacker: { before: aBefore, after: aAfter }
         });
@@ -433,11 +471,19 @@
         const before = getRun(h.player);
         const after = before != null ? before + gain : null;
         if (before != null) running.set(normalizePseudo(h.player), after);
-        hunts.set(String(h.sig || h.id), { gain, before, after });
+        hunts.set(String(h.sig || h.id), { item: h, gain, before, after });
       }
     }
 
-    tdcChainCache = { at: nowMs, attacks, hunts };
+    return { at: nowMs, attacks, hunts, finalTdc: running };
+  }
+
+  let tdcChainCache = { at: 0, attacks: new Map(), hunts: new Map(), finalTdc: new Map() };
+
+  function getTdcChains() {
+    const nowMs = Date.now();
+    if (nowMs - tdcChainCache.at < 500) return tdcChainCache;
+    tdcChainCache = simulateTimeline(nowMs);
     return tdcChainCache;
   }
 
@@ -449,65 +495,100 @@
     return getTdcChains().hunts;
   }
 
-  function getAttackTdcSummary(attackItem) {
+  function getAttackEvaluation(attackItem) {
     const chain = getAttackTdcChain().get(String((attackItem && (attackItem.sig || attackItem.id)) || ""));
-    if (chain && chain.target.before > 0) {
+    if (chain) return chain;
+    const tBefore = getPlayerTdc(attackItem && attackItem.target);
+    const aBefore = getPlayerTdc(attackItem && attackItem.attacker);
+    const ants = Math.max(0, getAttackSentAnts(attackItem));
+    let willFail = false;
+    let failReason = "";
+    let ratioPct = null;
+    if (tBefore && aBefore) {
+      ratioPct = Math.round((tBefore / aBefore) * 100);
+      if (tBefore < aBefore * 0.5) {
+        willFail = true;
+        failReason = `cible trop petite (${ratioPct}% < 50%)`;
+      } else if (tBefore > aBefore * 3) {
+        willFail = true;
+        failReason = `cible trop grande (${ratioPct}% > 300%)`;
+      }
+    }
+    const maxSteal20 = tBefore ? Math.floor(tBefore * 0.2) : null;
+    const taken = willFail || !tBefore ? 0 : (ants > 0 ? Math.min(ants, maxSteal20) : maxSteal20);
+    return {
+      item: attackItem,
+      ants,
+      taken,
+      maxSteal20,
+      willFail,
+      failReason,
+      ratioPct,
+      target: { before: tBefore, after: tBefore != null ? Math.max(0, tBefore - taken) : null },
+      attacker: { before: aBefore, after: aBefore != null ? aBefore + taken : null }
+    };
+  }
+
+  function getAttackTdcSummary(attackItem) {
+    const ev = getAttackEvaluation(attackItem);
+    const baseTdc = ev.target.before;
+    if (!baseTdc || baseTdc <= 0) {
       return {
-        hasTdc: true,
-        hasAnts: chain.ants > 0,
-        beforeTdc: chain.target.before,
-        afterTdc: chain.target.after,
-        sentAnts: chain.ants
+        hasTdc: false,
+        hasAnts: ev.ants > 0,
+        beforeTdc: null,
+        afterTdc: null,
+        sentAnts: ev.ants,
+        taken: 0,
+        maxSteal20: null,
+        willFail: false,
+        failReason: ""
       };
     }
-    const targetPseudo = (attackItem && attackItem.target) || getDevUser();
-    const baseTdc = getPlayerTdc(targetPseudo);
-    if (!baseTdc || baseTdc <= 0) {
-      return { hasTdc: false, hasAnts: false, beforeTdc: null, afterTdc: null, sentAnts: 0 };
-    }
-    const sentAnts = Math.max(0, getAttackSentAnts(attackItem));
-    const hasAnts = sentAnts > 0;
-    const afterTdc = hasAnts ? Math.max(0, baseTdc - sentAnts) : baseTdc;
     return {
       hasTdc: true,
-      hasAnts,
+      hasAnts: ev.ants > 0,
       beforeTdc: baseTdc,
-      afterTdc,
-      sentAnts
+      afterTdc: ev.target.after,
+      sentAnts: ev.ants,
+      taken: ev.taken,
+      maxSteal20: ev.maxSteal20,
+      willFail: ev.willFail,
+      failReason: ev.failReason
     };
   }
 
   function getAttackerTdcSummary(attackItem) {
-    const chain = getAttackTdcChain().get(String((attackItem && (attackItem.sig || attackItem.id)) || ""));
-    if (chain && chain.attacker.before > 0) {
+    const ev = getAttackEvaluation(attackItem);
+    const baseTdc = ev.attacker.before;
+    if (!baseTdc || baseTdc <= 0) {
       return {
-        hasTdc: true,
-        hasAnts: chain.ants > 0,
-        beforeTdc: chain.attacker.before,
-        afterTdc: chain.attacker.after,
-        sentAnts: chain.ants
+        hasTdc: false,
+        hasAnts: ev.ants > 0,
+        beforeTdc: null,
+        afterTdc: null,
+        sentAnts: ev.ants,
+        taken: 0,
+        willFail: false,
+        failReason: ""
       };
     }
-    const attackerPseudo = attackItem && attackItem.attacker;
-    const baseTdc = getPlayerTdc(attackerPseudo);
-    if (!baseTdc || baseTdc <= 0) {
-      return { hasTdc: false, hasAnts: false, beforeTdc: null, afterTdc: null, sentAnts: 0 };
-    }
-    const sentAnts = Math.max(0, getAttackSentAnts(attackItem));
-    const hasAnts = sentAnts > 0;
-    const afterTdc = hasAnts ? baseTdc + sentAnts : baseTdc;
     return {
       hasTdc: true,
-      hasAnts,
+      hasAnts: ev.ants > 0,
       beforeTdc: baseTdc,
-      afterTdc,
-      sentAnts
+      afterTdc: ev.attacker.after,
+      sentAnts: ev.ants,
+      taken: ev.taken,
+      willFail: ev.willFail,
+      failReason: ev.failReason
     };
   }
 
   function resetAccountSession(newPseudo = "") {
     setStoredToken("");
     setStoredPassword("");
+    promptedThisLoad = false;
     Object.keys(lastSentSig).forEach((k) => delete lastSentSig[k]);
     lastSyncUpdatedAt = 0;
     nextRetryAt = 0;
@@ -521,29 +602,35 @@
 
   function getStoredPassword() {
     try {
-      if (typeof GM_getValue === "function") {
-        return String(GM_getValue(STORAGE_KEYS.workerPass, "") || "");
-      }
+      const ls = localStorage.getItem(STORAGE_KEYS.workerPass);
+      if (ls && ls.trim()) return ls.trim();
     } catch (e) {}
     try {
-      return localStorage.getItem(STORAGE_KEYS.workerPass) || "";
-    } catch (e) {
-      return "";
-    }
+      if (typeof GM_getValue === "function") {
+        const gm = GM_getValue(STORAGE_KEYS.workerPass, "");
+        if (typeof gm === "string" && gm.trim()) {
+          try {
+            localStorage.setItem(STORAGE_KEYS.workerPass, gm.trim());
+          } catch (e) {}
+          return gm.trim();
+        }
+      }
+    } catch (e) {}
+    return "";
   }
 
   function setStoredPassword(pw) {
-    const clean = String(pw || "");
-    try {
-      if (typeof GM_getValue === "function") {
-        GM_setValue(STORAGE_KEYS.workerPass, clean);
-        return;
-      }
-    } catch (e) {}
+    const clean = String(pw || "").trim();
     try {
       if (clean) localStorage.setItem(STORAGE_KEYS.workerPass, clean);
       else localStorage.removeItem(STORAGE_KEYS.workerPass);
     } catch (e) {}
+    try {
+      if (typeof GM_setValue === "function") {
+        GM_setValue(STORAGE_KEYS.workerPass, clean);
+      }
+    } catch (e) {}
+    return clean;
   }
 
   function getStoredToken() {
@@ -722,7 +809,7 @@
 
   function parseRemainingSeconds(text) {
     const match = String(text || "").match(
-      /\bdans\s+(.+?)(?=\s+-\s*(?:Retour|Annuler)\b|\s+Arrivée\b|\s+Troupes\s+en\s+attaques?\b|$)/i
+      /\b(?:dans|durera\s*:?)\s+(.+?)(?=\s+-\s*(?:Retour|Annuler)\b|\s+Arrivée\b|\s+Troupes\s+en\s+attaques?\b|$)/i
     );
     if (!match) return null;
     const src = match[1];
@@ -837,10 +924,11 @@
     }
 
     const pseudo = String(authCfg.pseudo || getDevUser() || "").trim();
-    const configPassword = String(authCfg.password || "");
+    const configPassword = String(authCfg.password || "").trim();
     let password = configPassword || getStoredPassword();
 
-    if (!password && hasStoredDevUser()) {
+    if (!password && hasStoredDevUser() && !promptedThisLoad) {
+      promptedThisLoad = true;
       const typedPass = window.prompt(
         "Dôme de la Paix : mot de passe pour « " + pseudo + " » (le compte est créé s'il n'existe pas encore).",
         ""
@@ -860,6 +948,7 @@
     const loginRes = await httpJsonRequest("POST", `${baseUrl}/api/auth/login`, loginBody);
     if (loginRes.ok && loginRes.data && loginRes.data.token) {
       setStoredToken(loginRes.data.token);
+      setStoredPassword(password);
       return { ok: true, token: loginRes.data.token };
     }
 
@@ -867,11 +956,15 @@
       const regRes = await httpJsonRequest("POST", `${baseUrl}/api/auth/register`, { pseudo, password });
       if (regRes.ok && regRes.data && regRes.data.token) {
         setStoredToken(regRes.data.token);
+        setStoredPassword(password);
         return { ok: true, token: regRes.data.token };
       }
     }
 
-    if (loginRes.status === 401 && !configPassword) setStoredPassword("");
+    if (loginRes.status === 401 && !configPassword) {
+      setStoredPassword("");
+      promptedThisLoad = false;
+    }
 
     return { ok: false, error: loginRes.error || "Connexion au Worker refusée" };
   }
@@ -1182,9 +1275,9 @@
     let current = null;
 
     for (const line of lines) {
-      if (/vos\s+chasseuses?\s+vont\s+conqu[eé]rir\b/i.test(line)) {
+      if (/^-?\s*vos\s+chasseuses?\s+vont\s+conqu[eé]rir\b/i.test(line)) {
         if (current) blocks.push(current);
-        current = [line];
+        current = [line.replace(/^-+\s*/, "")];
       } else if (current) {
         if (/^(?:attaque\(s\)\s+en\s+cours|vos\s+arm[ée]es?|convois?)/i.test(line)) {
           blocks.push(current);
@@ -1291,6 +1384,109 @@
       }));
     syncWithWorker({ kind: "hunts", player: playerName, hunts: myHunts });
     return nextHunts;
+  }
+
+  function setupAcquerirTerrainGuard() {
+    if (!IS_ACQUERIR_TERRAIN || !document.body) return;
+    if (document.body.dataset.fmzHuntGuardBound === "1") return;
+    document.body.dataset.fmzHuntGuardBound = "1";
+
+    const findHuntAreaInput = () => {
+      const inputs = Array.from(document.querySelectorAll("input[type='text'], input[type='number'], input:not([type])"))
+        .filter((el) => !(el.closest && (el.closest("#fmz-gb-root") || el.closest("#fmz-gb-left-dock"))));
+      for (const inp of inputs) {
+        const ctx = ((inp.parentElement && inp.parentElement.innerText) || "") + " " + (inp.name || "") + " " + (inp.id || "");
+        if (/cm(?:²|2)|terrain|superficie/i.test(ctx)) return inp;
+      }
+      return inputs[0] || null;
+    };
+
+    const readPlannedHuntDurationSec = (areaVal) => {
+      const bodyText = document.body ? document.body.innerText : "";
+      const durLine = bodyText.split(/\r?\n/).find((l) => /cette\s+chasse\s+durera/i.test(l));
+      const parsedSec = durLine ? parseRemainingSeconds(durLine) : null;
+      if (parsedSec && parsedSec > 0) return parsedSec;
+
+      const benchmarks = readJsonArray(STORAGE_KEYS.huntBenchmarks);
+      if (benchmarks.length && areaVal > 0) {
+        const best = benchmarks[0];
+        if (best && best.area > 0 && best.durationSec > 0) {
+          return Math.max(60, Math.round((areaVal / best.area) * best.durationSec));
+        }
+      }
+      return 60;
+    };
+
+    const checkHuntImpact = (areaVal) => {
+      const now = Date.now();
+      const playerName = getDevUser();
+      const playerNorm = normalizePseudo(playerName);
+      const durSec = readPlannedHuntDurationSec(areaVal);
+      const simHunt = {
+        id: "sim_hunt_" + now,
+        sig: "sim_hunt_" + now,
+        type: "hunt",
+        player: playerName,
+        area: areaVal,
+        arrivalAt: now + durSec * 1000
+      };
+
+      const beforeSim = simulateTimeline(now, []);
+      const afterSim = simulateTimeline(now, [simHunt]);
+
+      const newlyFailing = [];
+      for (const [atkId, afterEv] of afterSim.attacks.entries()) {
+        if (!afterEv.willFail) continue;
+        const beforeEv = beforeSim.attacks.get(atkId);
+        if (beforeEv && beforeEv.willFail) continue;
+
+        const atk = afterEv.item;
+        const involvesMe =
+          normalizePseudo(atk.attacker) === playerNorm ||
+          normalizePseudo(atk.target) === playerNorm;
+        if (!involvesMe) continue;
+
+        newlyFailing.push(
+          `• ${atk.attacker} → ${atk.target} (${afterEv.failReason}, TDC ${formatNumber(afterEv.attacker.before)} vs ${formatNumber(afterEv.target.before)} cm²)`
+        );
+      }
+
+      return newlyFailing;
+    };
+
+    const handleLaunchAttempt = (e) => {
+      const areaInp = findHuntAreaInput();
+      const areaVal = areaInp ? (parseFrInt(areaInp.value) || 0) : 0;
+      if (areaVal <= 0) return;
+
+      const failingAttacks = checkHuntImpact(areaVal);
+      if (!failingAttacks.length) return;
+
+      const msg =
+        `⚠️ Attention : lancer cette chasse de +${formatNumber(areaVal)} cm² va faire échouer ${failingAttacks.length} attaque(s) en cours (règle 50%–300% du TDC) :\n\n` +
+        failingAttacks.join("\n") +
+        `\n\nVeux-tu quand même lancer la chasse ?`;
+
+      if (!window.confirm(msg)) {
+        e.preventDefault();
+        e.stopPropagation();
+        if (typeof e.stopImmediatePropagation === "function") e.stopImmediatePropagation();
+      }
+    };
+
+    document.addEventListener(
+      "click",
+      (e) => {
+        const btn = e.target && e.target.closest ? e.target.closest("input[type='submit'], button") : null;
+        if (!btn) return;
+        if (btn.closest && (btn.closest("#fmz-gb-root") || btn.closest("#fmz-gb-left-dock"))) return;
+        const label = ((btn.value || btn.innerText || "")).trim();
+        if (/lancer\s+la\s+chasse/i.test(label)) {
+          handleLaunchAttempt(e);
+        }
+      },
+      true
+    );
   }
 
   function getIncomingAttacksForCurrentUser() {
@@ -1400,13 +1596,6 @@
           display:flex;align-items:center;gap:8px;
           font-family:Arial,sans-serif;pointer-events:none;
         }
-        #fmz-armee-icon{
-          width:34px;height:34px;border-radius:999px;
-          background:#1f2937;border:1px solid #4b5563;color:#e5e7eb;
-          display:flex;align-items:center;justify-content:center;font-size:16px;
-          box-shadow:0 4px 12px rgba(0,0,0,.45);
-          pointer-events:auto;cursor:pointer;user-select:none;
-        }
         #fmz-armee-bubble{
           background:#166534;border:1px solid #22c55e;color:#ffffff;
           padding:6px 11px;border-radius:999px;font-size:12px;font-weight:bold;
@@ -1423,15 +1612,8 @@
     if (!wrap) {
       wrap = document.createElement("div");
       wrap.id = "fmz-armee-badge-wrap";
-      wrap.innerHTML = `
-        <div id="fmz-armee-bubble" role="status" aria-live="polite">Attaques importées</div>
-        <div id="fmz-armee-icon" title="Statut de synchronisation Armée">📡</div>
-      `;
+      wrap.innerHTML = `<div id="fmz-armee-bubble" role="status" aria-live="polite">Attaques importées</div>`;
       document.body.appendChild(wrap);
-      const icon = document.getElementById("fmz-armee-icon");
-      if (icon) {
-        icon.addEventListener("click", () => showArmeeImportedBubble("Attaques importées"));
-      }
     }
     return wrap;
   }
@@ -1597,178 +1779,16 @@
 
     return nextAttacks;
   }
-  function injectRessourcesStyles() {
-    if (document.getElementById("fmz-script-style")) return;
-    const style = document.createElement("style");
-    style.id = "fmz-script-style";
-    style.textContent = `
-      #fmz-panel{
-        margin:10px auto;max-width:920px;background:#1f2937;color:#f3f4f6;
-        border:1px solid #4b5563;border-left:5px solid #3b82f6;border-radius:8px;
-        padding:10px 12px;font-family:Arial,sans-serif;font-size:13px;
-        box-shadow:0 4px 14px rgba(0,0,0,.35);
-      }
-      #fmz-panel.has-alert{border-left-color:#ef4444;border-color:#991b1b}
-      .fmz-head{display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:8px;margin-bottom:8px}
-      .fmz-title{font-weight:bold;font-size:14px}
-      .fmz-dev{display:flex;align-items:center;gap:6px;font-size:11px;color:#cbd5e1}
-      .fmz-dev input{background:#111827;color:#fff;border:1px solid #6b7280;border-radius:4px;padding:3px 7px;font-size:12px;width:130px}
-      .fmz-dev button{background:#166534;color:#fff;border:1px solid #22c55e;border-radius:4px;padding:3px 9px;font-size:12px;cursor:pointer;font-weight:bold}
-      .fmz-item{background:#111827;border:1px solid #374151;border-left:4px solid #ef4444;border-radius:6px;padding:8px 10px;margin-top:6px;line-height:1.45}
-      .fmz-item-top{display:flex;justify-content:space-between;gap:8px;font-weight:bold;color:#fca5a5}
-      .fmz-muted{color:#9ca3af;font-size:12px}
-      .fmz-foot{margin-top:8px;padding-top:6px;border-top:1px solid #374151;font-size:12px;color:#fde68a}
-      .fmz-bench{margin-top:6px;padding:6px 8px;background:#111827;border:1px solid #374151;border-radius:6px;font-size:11px;color:#cbd5e1;line-height:1.4}
-    `;
-    document.head.appendChild(style);
-  }
-
-  function ensureRessourcesShell() {
-    injectRessourcesStyles();
-    let panel = document.getElementById("fmz-panel");
-    if (!panel) {
-      panel = document.createElement("div");
-      panel.id = "fmz-panel";
-      const anchor =
-        document.querySelector("#centre, .centre, main, #contenu, .contenu") ||
-        document.body.firstElementChild;
-      if (anchor && anchor.parentNode) {
-        anchor.parentNode.insertBefore(panel, anchor);
-      } else {
-        document.body.prepend(panel);
-      }
-    }
-
-    if (!panel.querySelector("#fmz-dev-input")) {
-      panel.innerHTML = `
-        <div class="fmz-head">
-          <div class="fmz-title">🛡️ Attaques en cours sur moi</div>
-          <div class="fmz-dev">
-            <span>Dev joueur :</span>
-            <input id="fmz-dev-input" type="text" autocomplete="off" title="Joueur actif en local">
-            <button id="fmz-dev-save" type="button">OK</button>
-          </div>
-        </div>
-        <div id="fmz-panel-body"></div>
-        <div id="fmz-panel-foot" class="fmz-foot"></div>
-        <div id="fmz-panel-bench" class="fmz-bench"></div>
-      `;
-
-      const saveBtn = panel.querySelector("#fmz-dev-save");
-      const inputEl = panel.querySelector("#fmz-dev-input");
-      const applyDevChange = () => {
-        setDevUser(inputEl.value);
-        runPageCycle();
-        pullFromWorker(true).then((changed) => {
-          if (changed) runPageCycle();
-        });
-      };
-      saveBtn.addEventListener("click", (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        applyDevChange();
-      });
-      inputEl.addEventListener("keydown", (e) => {
-        if (e.key === "Enter") {
-          e.preventDefault();
-          e.stopPropagation();
-          applyDevChange();
-        }
-      });
-    }
-    return panel;
-  }
-
-  function renderRessourcesPanel(huntsList) {
-    const panel = ensureRessourcesShell();
-    const inputEl = panel.querySelector("#fmz-dev-input");
-    const bodyEl = panel.querySelector("#fmz-panel-body");
-    const footEl = panel.querySelector("#fmz-panel-foot");
-    const benchEl = panel.querySelector("#fmz-panel-bench");
-    const now = Date.now();
-    const devUser = getDevUser();
-
-    if (inputEl && document.activeElement !== inputEl && inputEl.value !== devUser) {
-      inputEl.value = devUser;
-    }
-
-    const attacks = getIncomingAttacksForCurrentUser();
-    const myHunts = (huntsList || readJsonArray(STORAGE_KEYS.hunts)).filter(
-      (h) => h && h.arrivalAt > now && normalizePseudo(h.player) === normalizePseudo(devUser)
-    );
-
-    panel.classList.toggle("has-alert", attacks.length > 0);
-
-    bodyEl.innerHTML = !attacks.length
-      ? `<div class="fmz-muted">Aucune attaque en cours sur <b>${esc(devUser)}</b>.</div>`
-      : attacks
-          .map((a) => {
-            const leftSec = Math.max(0, Math.ceil((a.arrivalAt - now) / 1000));
-            const tdcInfo = getAttackTdcSummary(a);
-            const atkInfo = getAttackerTdcSummary(a);
-            const tdcParts = [];
-            if (tdcInfo.hasTdc) {
-              tdcParts.push(
-                tdcInfo.hasAnts
-                  ? `Cible : <b>${formatNumber(tdcInfo.beforeTdc)} → ${formatNumber(tdcInfo.afterTdc)} cm²</b>`
-                  : `Cible : <b>${formatNumber(tdcInfo.beforeTdc)} cm²</b>`
-              );
-            }
-            if (atkInfo.hasTdc) {
-              tdcParts.push(
-                atkInfo.hasAnts
-                  ? `${esc(a.attacker || "Attaquant")} : <b>${formatNumber(atkInfo.beforeTdc)} → ${formatNumber(atkInfo.afterTdc)} cm²</b>`
-                  : `${esc(a.attacker || "Attaquant")} : <b>${formatNumber(atkInfo.beforeTdc)} cm²</b>`
-              );
-            }
-            const antsPart = getAttackSentAnts(a) > 0
-              ? ` · 🐜 ${formatNumber(getAttackSentAnts(a))}`
-              : " · 🐜 effectif inconnu";
-            const tdcLine = tdcParts.length
-              ? `<div class="fmz-muted">📐 ${tdcParts.join(" · ")}${antsPart}</div>`
-              : `<div class="fmz-muted">📐 TDC : <a class="fmz-gb-link" href="${esc(SHORTCUT_LINKS.membersUrl)}">Lire page Membres</a>${antsPart}</div>`;
-            return `
-              <div class="fmz-item">
-                <div class="fmz-item-top">
-                  <span>🐎 ${esc(a.attacker || "Inconnu")} → ${esc(a.target)}</span>
-                  <span data-cd="${a.arrivalAt}">${formatDuration(leftSec)}</span>
-                </div>
-                ${tdcLine}
-                <div class="fmz-muted">🕒 ${esc(a.arrivalLabel || new Date(a.arrivalAt).toLocaleTimeString("fr-FR"))}</div>
-              </div>
-            `;
-          })
-          .join("");
-
-    footEl.innerHTML = myHunts.length
-      ? `⚔️ Chasses suivies automatiquement : <b>${myHunts.length}</b> (${myHunts
-          .map((h) => `${formatNumber(h.area)} cm² dans ${formatDuration(Math.ceil((h.arrivalAt - now) / 1000))}`)
-          .join(" · ")})`
-      : `⚔️ Chasses suivies automatiquement : <b>0</b>`;
-
-    const benchmarks = readJsonArray(STORAGE_KEYS.huntBenchmarks).slice(0, 5);
-    const history = readJsonArray(STORAGE_KEYS.huntHistory).slice(0, 3);
-    const benchText = benchmarks.length
-      ? benchmarks.map((b) => `<b>${formatNumber(b.area)} cm²</b> ≈ ${formatDuration(b.durationSec)}`).join(" · ")
-      : "Aucun repère enregistré pour l'instant (se remplit automatiquement quand une chasse est détectée).";
-    const histText = history.length
-      ? `<div style="margin-top:4px;color:#86efac">✅ Dernières chasses bouclées : ${history
-          .map((h) => `${esc(h.player || devUser)} (${formatNumber(h.area)} cm²)`)
-          .join(" · ")}</div>`
-      : "";
-    benchEl.innerHTML = `⏱️ <b>Repères de durée de chasse :</b> ${benchText}${histText}`;
+function removeLegacyRessourcesPanel() {
+    const oldPanel = document.getElementById("fmz-panel");
+    if (oldPanel) oldPanel.remove();
+    const oldStyle = document.getElementById("fmz-script-style");
+    if (oldStyle) oldStyle.remove();
   }
 
   function findPlayerByPseudo(name) {
     const n = normalizePseudo(name);
     return DEFAULT_PLAYERS.find((p) => normalizePseudo(p.name) === n) || null;
-  }
-
-  function calcTravelSeconds(fromP, toP) {
-    if (!fromP || !toP) return 60;
-    const d = Math.hypot((fromP.x || 0) - (toP.x || 0), (fromP.y || 0) - (toP.y || 0));
-    const sec = Math.round((1 - Math.exp(-d / 350)) * 7.375 * 86400 * Math.pow(0.9, fromP.va || 0));
-    return sec > 0 ? sec : 60;
   }
 
   function reqDelivered(r) {
@@ -1918,6 +1938,167 @@
     setTimeout(tryFill, 250);
   }
 
+  function extractOngoingConvoysFromCommercePage() {
+    if (!IS_COMMERCE || !document.body) return [];
+    const now = Date.now();
+    const senderName = getDevUser();
+    const fullText = document.body.innerText || "";
+    const lines = fullText.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+    const parsed = [];
+
+    for (let i = 0; i < lines.length; i++) {
+      let line = lines[i].replace(/^-+\s*/, "");
+      if (!/vous\s+allez\s+livrer\s+/i.test(line)) continue;
+
+      if (!/\bdans\s+/i.test(line) && i + 1 < lines.length && /\bdans\s+/i.test(lines[i + 1])) {
+        line = `${line} ${lines[i + 1].trim()}`;
+      }
+
+      const remSec = parseRemainingSeconds(line);
+      if (remSec === null || remSec <= 0) continue;
+
+      const m = line.match(/vous\s+allez\s+livrer\s+(.+?)\s+[àa]\s+([^\s]+(?:\s+[^\s]+)*?)\s+dans\s+/i);
+      if (!m) continue;
+
+      const resPart = m[1];
+      const destRaw = m[2].trim();
+      const destNorm = normalizePseudo(destRaw);
+      if (!destNorm) continue;
+
+      const appleMatch = resPart.match(/([\d\s\u00a0.,]+)\s*(?:🍎|pommes?|nourriture)/i);
+      const woodMatch = resPart.match(/([\d\s\u00a0.,]+)\s*(?:🪵|bois|mat[ée]riaux?)/i);
+
+      let apples = appleMatch ? (parseFrInt(appleMatch[1]) || 0) : 0;
+      let wood = woodMatch ? (parseFrInt(woodMatch[1]) || 0) : 0;
+
+      if (apples === 0 && wood === 0) {
+        const nums = Array.from(resPart.matchAll(/\d{1,3}(?:[\s\u00a0]\d{3})+|\d+/g))
+          .map((x) => parseFrInt(x[0]) || 0)
+          .filter((n) => n > 0);
+        if (nums.length >= 2) {
+          apples = nums[0];
+          wood = nums[1];
+        } else if (nums.length === 1) {
+          apples = nums[0];
+        }
+      }
+
+      if (apples <= 0 && wood <= 0) continue;
+
+      const arrivalAt = now + remSec * 1000;
+      const bucket = Math.round(arrivalAt / 30000);
+      const id = `cv_${normalizePseudo(senderName)}_${destNorm}_${apples}_${wood}_${bucket}`;
+
+      parsed.push({
+        id,
+        type: "convoy",
+        from: findPlayerByPseudo(senderName) || { name: senderName, x: 0, y: 0, va: 0 },
+        to: findPlayerByPseudo(destRaw) || { name: destRaw, x: 0, y: 0, va: 0 },
+        duration: remSec,
+        startAt: now,
+        arrivalAt,
+        wood,
+        apples,
+        createdBy: senderName
+      });
+    }
+
+    return parsed;
+  }
+
+  function reconcileCommerceConvoys() {
+    if (!IS_COMMERCE) return;
+    const now = Date.now();
+    const senderName = getDevUser();
+    const senderNorm = normalizePseudo(senderName);
+    const detected = extractOngoingConvoysFromCommercePage();
+    if (!detected.length) return;
+
+    const movements = readJsonArray(STORAGE_KEYS.movements).filter(
+      (m) => m && Number(m.arrivalAt || 0) > now - 5000
+    );
+    const existingIds = new Set(movements.map((m) => String(m.id)));
+    const newlyDetected = [];
+
+    for (const cv of detected) {
+      const prevSame = movements.find(
+        (m) =>
+          m &&
+          m.type === "convoy" &&
+          normalizePseudo(m.from && m.from.name) === senderNorm &&
+          normalizePseudo(m.to && m.to.name) === normalizePseudo(cv.to.name) &&
+          Number(m.wood || 0) === Number(cv.wood || 0) &&
+          Number(m.apples || 0) === Number(cv.apples || 0) &&
+          Math.abs(Number(m.arrivalAt || 0) - Number(cv.arrivalAt || 0)) < 35000
+      );
+
+      if (prevSame) {
+        cv.id = prevSame.id;
+        cv.arrivalAt = prevSame.arrivalAt;
+        cv.requestId = prevSame.requestId || "";
+      } else if (!existingIds.has(cv.id)) {
+        movements.push(cv);
+        existingIds.add(cv.id);
+        newlyDetected.push(cv);
+      }
+    }
+
+    let requestsChanged = false;
+    for (const cv of newlyDetected) {
+      const destNorm = normalizePseudo(cv.to && cv.to.name);
+      const matchingReq = convoyRequests
+        .filter((r) => r && r.status !== "done" && normalizePseudo(r.player) === destNorm && !isOwnRequest(r, senderName))
+        .sort((a, b) => Number(a.createdAt || 0) - Number(b.createdAt || 0))
+        .find((r) => {
+          const rem = reqRemaining(r);
+          const matchWood = cv.wood > 0 ? rem.wood >= cv.wood : rem.wood === 0;
+          const matchApples = cv.apples > 0 ? rem.apples >= cv.apples : rem.apples === 0;
+          return (cv.wood > 0 || cv.apples > 0) && matchWood && matchApples;
+        });
+
+      if (matchingReq) {
+        cv.requestId = matchingReq.id;
+        const delivery = {
+          by: senderName,
+          loggedBy: senderName,
+          wood: cv.wood,
+          apples: cv.apples,
+          at: now,
+          arrivalAt: cv.arrivalAt,
+          movementId: cv.id
+        };
+        matchingReq.deliveries.push(delivery);
+        const leftAfter = reqRemaining(matchingReq);
+        if (leftAfter.wood <= 0 && leftAfter.apples <= 0) {
+          matchingReq.status = "done";
+          matchingReq.doneAt = now;
+        }
+        delete convoyDrafts[matchingReq.id];
+        requestsChanged = true;
+        syncWithWorker({ kind: "requests", action: "deliver", id: matchingReq.id, delivery }, false);
+      }
+
+      convoyLog.push({
+        from: senderName,
+        to: (cv.to && cv.to.name) || "Destinataire",
+        wood: cv.wood,
+        apples: cv.apples,
+        requestId: cv.requestId || "",
+        arrivalAt: cv.arrivalAt
+      });
+      syncWithWorker({ kind: "movements", action: "create", movement: cv }, false);
+    }
+
+    if (newlyDetected.length > 0) {
+      writeJsonArray(STORAGE_KEYS.movements, movements);
+      saveConvoyLog();
+      if (requestsChanged) {
+        saveConvoyRequestsLocal();
+      }
+      lastCommerceMessage = `✓ ${newlyDetected.length} convoi(s) validé(s) depuis la page Commerce.`;
+    }
+  }
+
   function createConvoyRequest({ wood, apples, note }) {
     const cleanWood = clampNonNegativeInt(wood);
     const cleanApples = clampNonNegativeInt(apples);
@@ -1946,7 +2127,7 @@
     return { ok: true, message: "✓ Demande de convoi enregistrée." };
   }
 
-  function deliverConvoyRequest({ requestId, rawWood, rawApples, redirectToCommerce = false }) {
+  function prepareConvoyDelivery({ requestId, rawWood, rawApples, redirectToCommerce = false }) {
     const r = convoyRequests.find((item) => item.id === requestId);
     if (!r) return { ok: false, message: "⚠️ Demande introuvable." };
 
@@ -1973,76 +2154,25 @@
       return { ok: false, message: "⚠️ Indique une quantité supérieure à 0." };
     }
 
-    const sender = findPlayerByPseudo(devUser) || { name: devUser, x: 0, y: 0, va: 0 };
-    const dest = findPlayerByPseudo(r.player) || { name: r.player, x: 0, y: 0, va: 0 };
-    const dur = calcTravelSeconds(sender, dest);
-    const tNow = Date.now();
-    const arrivalAt = tNow + dur * 1000;
-    const mvs = readJsonArray(STORAGE_KEYS.movements);
-    const mvId = tNow + "_" + Math.floor(Math.random() * 1e6);
-    const mv = {
-      id: mvId,
-      type: "convoy",
-      from: sender,
-      to: dest,
-      duration: dur,
-      startAt: tNow,
-      arrivalAt,
-      wood,
-      apples,
-      requestId: r.id,
-      createdBy: devUser
-    };
-    mvs.push(mv);
-    writeJsonArray(STORAGE_KEYS.movements, mvs);
-    convoyLog.push({
-      from: sender.name,
-      to: dest.name,
-      wood,
-      apples,
-      requestId: r.id,
-      arrivalAt
-    });
-    saveConvoyLog();
-
-    const delivery = {
-      by: sender.name,
-      loggedBy: devUser,
-      wood,
-      apples,
-      at: tNow,
-      arrivalAt,
-      movementId: mvId
-    };
-    r.deliveries.push(delivery);
-    const leftAfter = reqRemaining(r);
-    const isPartial = leftAfter.wood > 0 || leftAfter.apples > 0;
-    if (!isPartial) {
-      r.status = "done";
-      r.doneAt = tNow;
-    }
-    delete convoyDrafts[r.id];
-    saveConvoyRequestsLocal();
-    syncWithWorker({ kind: "movements", action: "create", movement: mv }, false);
-    syncWithWorker({ kind: "requests", action: "deliver", id: r.id, delivery }, false);
+    const destName = r.player;
 
     if (IS_COMMERCE) {
-      fillCommerceFormFields({ recipient: dest.name, apples, wood });
+      fillCommerceFormFields({ recipient: destName, apples, wood });
       return {
         ok: true,
-        message: `✓ Convoi enregistré vers ${dest.name} · champs pré-remplis.`
+        message: `✓ Champs pré-remplis pour ${destName}. Valide l'envoi sur Fourmizzz pour clôturer la demande.`
       };
     }
 
     if (redirectToCommerce) {
-      queuePendingCommerceFill({ recipient: dest.name, apples, wood });
+      queuePendingCommerceFill({ recipient: destName, apples, wood });
       window.location.href = "/commerce.php";
       return { ok: true, redirected: true, message: "🚚 Redirection vers Commerce…" };
     }
 
     return {
       ok: true,
-      message: `✓ Convoi enregistré vers ${dest.name}.`
+      message: `✓ Convoi préparé vers ${destName}.`
     };
   }
 
@@ -2162,6 +2292,7 @@
       .fmz-gb-row{padding:6px 4px;border-top:1px solid #1f2937;line-height:1.3}
       .fmz-gb-row.soon{background:rgba(239,68,68,.12);padding:6px 6px;border-radius:6px}
       .fmz-gb-row.targeted-me{border-left:2px solid #f87171;padding-left:6px}
+      .fmz-gb-row.will-fail{background:rgba(245,158,11,.14);border-left:2px solid #f59e0b;padding:6px 6px;border-radius:6px}
       .fmz-gb-row:first-of-type{border-top:none;padding-top:2px}
       .fmz-gb-row-top{display:flex;justify-content:space-between;align-items:center;gap:6px}
       .fmz-gb-cd{white-space:nowrap;font-weight:bold;font-size:11px;color:#93c5fd}
@@ -2169,6 +2300,7 @@
       .fmz-gb-cd.warn{color:#fde68a}
       .fmz-gb-sub{color:#9ca3af;font-size:11px;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
       .fmz-gb-tdc{color:#cbd5e1;font-size:11px;margin-top:2px}
+      .fmz-gb-fail{color:#fbbf24;font-size:11px;font-weight:bold;margin-top:2px}
       .fmz-gb-empty{color:#9ca3af;font-size:11px}
       .fmz-gb-grid2{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:5px}
       .fmz-gb-lbl{display:block;color:#9ca3af;font-size:11px;margin-top:5px}
@@ -2387,6 +2519,10 @@
               : `<b>${esc(a.target || "?")}</b>`;
 
             const sentAnts = getAttackSentAnts(a);
+            const atkTdc = getAttackerTdcSummary(a);
+            const defTdc = getAttackTdcSummary(a);
+            const willFail = defTdc.willFail;
+
             const metaParts = [];
             const arrivalTxt = a.arrivalLabel
               ? esc(a.arrivalLabel)
@@ -2394,13 +2530,14 @@
             metaParts.push(`🕒 ${arrivalTxt}`);
             if (a.targetKind) metaParts.push(esc(a.targetKind));
             metaParts.push(sentAnts > 0 ? `🐜 ${formatNumber(sentAnts)}` : `🐜 effectif inconnu`);
+            if (!willFail && defTdc.maxSteal20 != null) {
+              metaParts.push(`max 20% : ${formatNumber(defTdc.maxSteal20)}`);
+            }
 
-            const atkTdc = getAttackerTdcSummary(a);
-            const defTdc = getAttackTdcSummary(a);
             const tdcParts = [];
             if (atkTdc.hasTdc) {
               tdcParts.push(
-                atkTdc.hasAnts
+                !willFail && atkTdc.taken > 0
                   ? `${esc(a.attacker || "Attaquant")} ${formatNumber(atkTdc.beforeTdc)}→${formatNumber(atkTdc.afterTdc)}`
                   : `${esc(a.attacker || "Attaquant")} ${formatNumber(atkTdc.beforeTdc)}`
               );
@@ -2408,7 +2545,7 @@
             if (defTdc.hasTdc) {
               const defLabel = isMeTarget ? "Moi" : esc(a.target || "Cible");
               tdcParts.push(
-                defTdc.hasAnts
+                !willFail && defTdc.taken > 0
                   ? `${defLabel} ${formatNumber(defTdc.beforeTdc)}→${formatNumber(defTdc.afterTdc)}`
                   : `${defLabel} ${formatNumber(defTdc.beforeTdc)}`
               );
@@ -2416,15 +2553,19 @@
             const tdcSub = tdcParts.length
               ? `<div class="fmz-gb-tdc">📐 ${tdcParts.join(" · ")} cm²</div>`
               : "";
+            const failLine = willFail
+              ? `<div class="fmz-gb-fail">⚠️ Échec prévu : ${esc(defTdc.failReason)}</div>`
+              : "";
 
             return `
-              <div class="fmz-gb-row ${isWarn ? "soon" : ""} ${isMeTarget ? "targeted-me" : ""}">
+              <div class="fmz-gb-row ${isWarn ? "soon" : ""} ${isMeTarget ? "targeted-me" : ""} ${willFail ? "will-fail" : ""}">
                 <div class="fmz-gb-row-top">
-                  <span>${isCritical ? "🚨" : "⚔️"} <b>${esc(a.attacker || "Inconnu")}</b> → ${targetBadge}</span>
+                  <span>${willFail ? "⚠️" : isCritical ? "🚨" : "⚔️"} <b>${esc(a.attacker || "Inconnu")}</b> → ${targetBadge}</span>
                   <span class="fmz-gb-cd ${urgencyClass}" data-cd="${a.arrivalAt}">${formatDuration(leftSec)}</span>
                 </div>
                 <div class="fmz-gb-sub">${metaParts.join(" · ")}</div>
                 ${tdcSub}
+                ${failLine}
               </div>
             `;
           })
@@ -2691,7 +2832,7 @@
           const aInp = card?.querySelector('[data-cv-df="apples"]');
           setConvoyBubbleOpen(false);
           renderGlobalBubble();
-          deliverConvoyRequest({
+          prepareConvoyDelivery({
             requestId: r.id,
             rawWood: wInp ? wInp.value : 0,
             rawApples: aInp ? aInp.value : 0,
@@ -2740,25 +2881,14 @@
     if (selected) {
       const attacks = getAllAllianceAttacks(now).filter((a) => normalizePseudo(a.target) === selected.key);
       const hunts = getAllActiveHunts(now).filter((h) => normalizePseudo(h.player) === selected.key);
-      const chain = getAttackTdcChain();
-      const huntChain = getHuntTdcChain();
+      const sim = getTdcChains();
       const currentTdc = getPlayerTdc(selected.name);
-      let projected = null;
-      let projectedAt = -1;
-      let totalAnts = 0;
+      const projected = sim.finalTdc && sim.finalTdc.has(selected.key) ? sim.finalTdc.get(selected.key) : null;
+      let totalTaken = 0;
       attacks.forEach((a) => {
-        const ch = chain.get(String(a.sig || a.id));
-        if (ch && ch.target.after != null && Number(a.arrivalAt || 0) >= projectedAt) {
-          projected = ch.target.after;
-          projectedAt = Number(a.arrivalAt || 0);
-        }
-        totalAnts += getAttackSentAnts(a);
-      });
-      hunts.forEach((h) => {
-        const ch = huntChain.get(String(h.sig || h.id));
-        if (ch && ch.after != null && Number(h.arrivalAt || 0) >= projectedAt) {
-          projected = ch.after;
-          projectedAt = Number(h.arrivalAt || 0);
+        const ch = sim.attacks.get(String(a.sig || a.id));
+        if (ch && !ch.willFail) {
+          totalTaken += ch.taken || 0;
         }
       });
 
@@ -2766,7 +2896,7 @@
         <div class="fmz-gb-summary">
           📐 TDC actuel : <b>${currentTdc ? formatNumber(currentTdc) + " cm²" : "inconnu"}</b>
           ${projected != null && (attacks.length || hunts.length) ? ` · après tous les mouvements : <b>${formatNumber(projected)} cm²</b>` : ""}<br>
-          ⚔️ Attaques sur lui : <b>${attacks.length}</b> · 🐜 Total envoyé : <b>${formatNumber(totalAnts)}</b> · 🏹 Chasses : <b>${hunts.length}</b>
+          ⚔️ Attaques sur lui : <b>${attacks.length}</b> · 📉 TDC pris max (20%) : <b>${formatNumber(totalTaken)} cm²</b> · 🏹 Chasses : <b>${hunts.length}</b>
         </div>
       `;
 
@@ -2781,36 +2911,44 @@
               const sentAnts = getAttackSentAnts(a);
               const defTdc = getAttackTdcSummary(a);
               const atkTdc = getAttackerTdcSummary(a);
+              const willFail = defTdc.willFail;
               const arrivalTxt = a.arrivalLabel
                 ? esc(a.arrivalLabel)
                 : new Date(Number(a.arrivalAt || now)).toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" });
               const meta = [`🕒 ${arrivalTxt}`];
               if (a.targetKind) meta.push(esc(a.targetKind));
               meta.push(sentAnts > 0 ? `🐜 ${formatNumber(sentAnts)}` : "🐜 effectif inconnu");
+              if (!willFail && defTdc.maxSteal20 != null) {
+                meta.push(`max 20% : ${formatNumber(defTdc.maxSteal20)}`);
+              }
               const tdcParts = [];
               if (defTdc.hasTdc) {
                 tdcParts.push(
-                  defTdc.hasAnts
+                  !willFail && defTdc.taken > 0
                     ? `${esc(selected.name)} ${formatNumber(defTdc.beforeTdc)}→${formatNumber(defTdc.afterTdc)}`
                     : `${esc(selected.name)} ${formatNumber(defTdc.beforeTdc)}`
                 );
               }
               if (atkTdc.hasTdc) {
                 tdcParts.push(
-                  atkTdc.hasAnts
+                  !willFail && atkTdc.taken > 0
                     ? `${esc(a.attacker || "Attaquant")} ${formatNumber(atkTdc.beforeTdc)}→${formatNumber(atkTdc.afterTdc)}`
                     : `${esc(a.attacker || "Attaquant")} ${formatNumber(atkTdc.beforeTdc)}`
                 );
               }
               const tdcSub = tdcParts.length ? `<div class="fmz-gb-tdc">📐 ${tdcParts.join(" · ")} cm²</div>` : "";
+              const failLine = willFail
+                ? `<div class="fmz-gb-fail">⚠️ Échec prévu : ${esc(defTdc.failReason)}</div>`
+                : "";
               return `
-                <div class="fmz-gb-row ${isWarn ? "soon" : ""}">
+                <div class="fmz-gb-row ${isWarn ? "soon" : ""} ${willFail ? "will-fail" : ""}">
                   <div class="fmz-gb-row-top">
-                    <span>${isCritical ? "🚨" : "⚔️"} <b>${esc(a.attacker || "Inconnu")}</b></span>
+                    <span>${willFail ? "⚠️" : isCritical ? "🚨" : "⚔️"} <b>${esc(a.attacker || "Inconnu")}</b></span>
                     <span class="fmz-gb-cd ${urgencyClass}" data-cd="${a.arrivalAt}">${formatDuration(leftSec)}</span>
                   </div>
                   <div class="fmz-gb-sub">${meta.join(" · ")}</div>
                   ${tdcSub}
+                  ${failLine}
                 </div>
               `;
             })
@@ -3016,17 +3154,18 @@
               const tdcInfo = getAttackTdcSummary(a);
               const atkTdc = getAttackerTdcSummary(a);
               const sentAnts = getAttackSentAnts(a);
+              const willFail = tdcInfo.willFail;
               const tdcParts = [];
               if (tdcInfo.hasTdc) {
                 tdcParts.push(
-                  tdcInfo.hasAnts
+                  !willFail && tdcInfo.taken > 0
                     ? `Moi <b>${formatNumber(tdcInfo.beforeTdc)}→${formatNumber(tdcInfo.afterTdc)}</b>`
                     : `Moi <b>${formatNumber(tdcInfo.beforeTdc)}</b>`
                 );
               }
               if (atkTdc.hasTdc) {
                 tdcParts.push(
-                  atkTdc.hasAnts
+                  !willFail && atkTdc.taken > 0
                     ? `${esc(a.attacker || "Attaquant")} <b>${formatNumber(atkTdc.beforeTdc)}→${formatNumber(atkTdc.afterTdc)}</b>`
                     : `${esc(a.attacker || "Attaquant")} <b>${formatNumber(atkTdc.beforeTdc)}</b>`
                 );
@@ -3034,16 +3173,23 @@
               const antsPart = sentAnts > 0
                 ? ` · 🐜 ${formatNumber(sentAnts)}`
                 : ` · 🐜 effectif inconnu`;
+              const maxPart = !willFail && tdcInfo.maxSteal20 != null
+                ? ` · max 20% : ${formatNumber(tdcInfo.maxSteal20)}`
+                : "";
               const tdcSub = tdcParts.length
-                ? `${tdcParts.join(" · ")} cm²${antsPart}`
+                ? `${tdcParts.join(" · ")} cm²${antsPart}${maxPart}`
                 : `TDC : <a class="fmz-gb-link" href="${esc(SHORTCUT_LINKS.membersUrl)}">Lire page Membres</a>${antsPart}`;
+              const failLine = willFail
+                ? `<div class="fmz-gb-fail">⚠️ Échec prévu : ${esc(tdcInfo.failReason)}</div>`
+                : "";
               return `
-                <div class="fmz-gb-row ${isWarn ? "soon" : ""} targeted-me">
+                <div class="fmz-gb-row ${isWarn ? "soon" : ""} targeted-me ${willFail ? "will-fail" : ""}">
                   <div class="fmz-gb-row-top">
-                    <b>${isCritical ? "🚨" : "🐎"} ${esc(a.attacker || "Inconnu")}</b>
+                    <b>${willFail ? "⚠️" : isCritical ? "🚨" : "🐎"} ${esc(a.attacker || "Inconnu")}</b>
                     <span class="fmz-gb-cd ${urgencyClass}" data-cd="${a.arrivalAt}">${formatDuration(leftSec)}</span>
                   </div>
                   <div class="fmz-gb-tdc">${tdcSub}</div>
+                  ${failLine}
                 </div>
               `;
             })
@@ -3376,17 +3522,21 @@
   }
 
   function runPageCycle() {
+    removeLegacyRessourcesPanel();
     if (isMembersPageView()) {
       scrapeAllianceMembersTdc();
     }
-    if (IS_RESSOURCES) {
-      const hunts = reconcileHunts();
-      renderRessourcesPanel(hunts);
+    if (IS_HUNT_PAGE) {
+      reconcileHunts();
+      if (IS_ACQUERIR_TERRAIN) {
+        setupAcquerirTerrainGuard();
+      }
     } else if (IS_ATTACK_PAGE) {
       ensureArmeeIndicator();
       reconcileArmeeAttacks();
     } else if (IS_COMMERCE) {
       consumePendingCommerceFillIfNeeded();
+      reconcileCommerceConvoys();
     }
     renderGlobalBubble();
   }
@@ -3405,8 +3555,7 @@
     const active = document.activeElement;
     if (
       active &&
-      (active.id === "fmz-dev-input" ||
-        active.id === "fmz-gb-pseudo-input" ||
+      (active.id === "fmz-gb-pseudo-input" ||
         (active.closest && active.closest("#fmz-gb-root")))
     ) {
       return;
@@ -3417,7 +3566,6 @@
   setInterval(() => {
     const active = document.activeElement;
     if (active && active.closest && active.closest("#fmz-gb-root")) return;
-    if (active && active.id === "fmz-dev-input") return;
     pullFromWorker(false).then((changed) => {
       if (changed) runPageCycle();
       else renderGlobalBubble();
