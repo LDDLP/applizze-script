@@ -1730,7 +1730,7 @@
       previewBox = document.createElement("div");
       previewBox.id = "fmz-hunt-live-preview";
       previewBox.style.cssText =
-        "margin-top:8px;padding:8px 10px;background:#111827;color:#f3f4f6;border:1px solid #4b5563;border-radius:8px;font-size:12px;line-height:1.45;";
+        "margin-top:8px;padding:8px 10px;background:rgba(11,18,32,.9);color:#f0f9ff;border:1px solid rgba(56,189,248,.35);border-radius:10px;font-size:12px;line-height:1.45;font-variant-numeric:tabular-nums;";
       areaInp.insertAdjacentElement("afterend", previewBox);
       areaInp.addEventListener("input", updateAcquerirTerrainPreview);
       areaInp.addEventListener("change", updateAcquerirTerrainPreview);
@@ -1960,12 +1960,13 @@
         #fmz-armee-badge-wrap{
           position:fixed;right:12px;bottom:58px;z-index:10001;
           display:flex;align-items:center;gap:8px;
-          font-family:Arial,sans-serif;pointer-events:none;
+          font-family:system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif;pointer-events:none;
         }
         #fmz-armee-bubble{
-          background:#166534;border:1px solid #22c55e;color:#ffffff;
-          padding:6px 11px;border-radius:999px;font-size:12px;font-weight:bold;
-          box-shadow:0 6px 18px rgba(0,0,0,.45);
+          background:rgba(6,78,59,.92);border:1px solid rgba(52,211,153,.65);color:#ecfdf5;
+          padding:6px 12px;border-radius:999px;font-size:12px;font-weight:700;
+          box-shadow:0 8px 22px rgba(0,0,0,.55),0 0 14px rgba(16,185,129,.25);
+          backdrop-filter:blur(10px);
           opacity:0;transform:translateY(6px);
           transition:opacity .2s ease,transform .2s ease;white-space:nowrap;
         }
@@ -2645,174 +2646,235 @@
     style.textContent = `
       @keyframes fmzUpdateBlink {
         0%, 100% {
-          background:#991b1b;
+          background:rgba(153,27,27,.95);
           border-color:#f87171;
           color:#ffffff;
           box-shadow:0 0 12px rgba(239,68,68,.85);
         }
         50% {
-          background:#ef4444;
+          background:rgba(239,68,68,.98);
           border-color:#fecaca;
           color:#ffffff;
-          box-shadow:0 0 20px rgba(248,113,113,1);
+          box-shadow:0 0 22px rgba(248,113,113,1);
         }
+      }
+      @keyframes fmzHudEnter {
+        from { opacity:0; transform:translateY(6px) scale(.99); }
+        to { opacity:1; transform:translateY(0) scale(1); }
       }
       #fmz-gb-left-dock{
         position:fixed;left:12px;bottom:14px;z-index:10000;
         display:flex;flex-direction:column;align-items:flex-start;gap:6px;
-        font-family:Arial,sans-serif;font-size:12px;color:#f3f4f6;
+        font-family:system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif;
+        font-size:12px;color:#e2e8f0;font-variant-numeric:tabular-nums;
       }
       #fmz-gb-root{
         position:fixed;right:12px;bottom:14px;z-index:10000;
         display:flex;flex-direction:column;align-items:flex-end;gap:8px;
-        font-family:Arial,sans-serif;font-size:12px;color:#f3f4f6;
+        font-family:system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif;
+        font-size:12px;color:#e2e8f0;font-variant-numeric:tabular-nums;
       }
       #fmz-gb-root.has-armee-badge #fmz-gb-card{margin-bottom:44px}
       #fmz-gb-root *, #fmz-gb-left-dock *{box-sizing:border-box}
       .fmz-gb-dock{display:flex;align-items:center;gap:6px;flex-wrap:wrap;justify-content:flex-end}
       .fmz-gb-fab{
         display:inline-flex;align-items:center;gap:6px;text-decoration:none;
-        background:#1f2937;color:#f9fafb;border:1px solid #4b5563;
+        background:linear-gradient(135deg,rgba(15,23,42,.92),rgba(17,24,39,.92));
+        color:#e2e8f0;border:1px solid rgba(56,189,248,.32);
+        box-shadow:0 6px 18px rgba(0,0,0,.55),inset 0 1px 0 rgba(255,255,255,.07);
+        backdrop-filter:blur(10px);
         border-radius:999px;padding:7px 11px;cursor:pointer;
-        font-weight:bold;font-size:12px;box-shadow:0 6px 18px rgba(0,0,0,.5);
-        user-select:none;
+        font-weight:700;font-size:12px;user-select:none;
+        transition:transform .14s ease,border-color .14s ease,box-shadow .14s ease,background .14s ease;
       }
-      .fmz-gb-fab:hover{background:#374151;color:#fff}
+      .fmz-gb-fab:hover{
+        background:linear-gradient(135deg,rgba(30,41,59,.96),rgba(15,23,42,.96));
+        border-color:rgba(34,211,238,.7);
+        box-shadow:0 8px 22px rgba(0,0,0,.65),0 0 14px rgba(34,211,238,.22);
+        color:#ffffff;transform:translateY(-1px);
+      }
       .fmz-gb-fab.alert{
-        background:#7f1d1d;border-color:#ef4444;color:#fff;
+        background:linear-gradient(135deg,rgba(127,29,29,.94),rgba(69,10,10,.94));
+        border-color:rgba(248,113,113,.75);color:#fff;
+        box-shadow:0 6px 20px rgba(127,29,29,.45),0 0 14px rgba(239,68,68,.3);
       }
       .fmz-gb-fab.convoy.active, .fmz-gb-fab.alliance.active, .fmz-gb-fab.stats.active, .fmz-gb-fab.players.active{
-        background:#1e3a8a;border-color:#60a5fa;color:#fff;
+        background:linear-gradient(135deg,rgba(8,145,178,.42),rgba(30,58,138,.82));
+        border-color:#22d3ee;color:#ecfeff;
+        box-shadow:0 0 16px rgba(34,211,238,.35);
       }
       .fmz-gb-fab.update{
-        background:#14532d;border-color:#22c55e;color:#dcfce7;
+        background:linear-gradient(135deg,rgba(6,95,70,.85),rgba(15,23,42,.92));
+        border-color:rgba(52,211,153,.55);color:#d1fae5;
       }
-      .fmz-gb-fab.update:hover{background:#166534;color:#fff}
+      .fmz-gb-fab.update:hover{border-color:#34d399;color:#fff}
       .fmz-gb-fab.update.needs-update{
         animation:fmzUpdateBlink 1s infinite ease-in-out;
       }
       .fmz-gb-pill{
-        background:#111827;border:1px solid #4b5563;border-radius:999px;
-        padding:1px 6px;font-size:11px;color:#93c5fd;
+        background:rgba(2,6,23,.8);border:1px solid rgba(56,189,248,.35);border-radius:999px;
+        padding:1px 7px;font-size:11px;color:#67e8f9;font-weight:700;
       }
       .fmz-gb-fab.alert .fmz-gb-pill{
-        background:#450a0a;border-color:#fca5a5;color:#fecaca;
+        background:rgba(69,10,10,.88);border-color:rgba(252,165,165,.6);color:#fecaca;
       }
       #fmz-gb-card, .fmz-gb-card{
-        width:min(368px, calc(100vw - 24px));
+        width:min(372px, calc(100vw - 24px));
         max-height:calc(100vh - 125px);
         overflow-y:auto;
-        background:#1f2937 !important;
-        color:#f3f4f6 !important;
+        background:linear-gradient(180deg,rgba(11,18,32,.94),rgba(15,23,42,.94)) !important;
+        color:#e2e8f0 !important;
         opacity:1 !important;
-        border:1px solid #4b5563;
-        border-radius:12px;
-        padding:10px;
-        box-shadow:0 10px 28px rgba(0,0,0,.75);
+        border:1px solid rgba(56,189,248,.35);
+        border-radius:14px;
+        padding:11px;
+        box-shadow:0 16px 36px rgba(0,0,0,.78),0 0 24px rgba(14,165,233,.12),inset 0 1px 0 rgba(255,255,255,.08);
+        backdrop-filter:blur(12px);
+        animation:fmzHudEnter .16s ease-out;
       }
       .fmz-gb-head{
         display:flex;justify-content:space-between;align-items:center;
-        gap:6px;padding-bottom:7px;margin-bottom:8px;border-bottom:1px solid #374151;
+        gap:6px;padding-bottom:8px;margin-bottom:8px;
+        border-bottom:1px solid rgba(56,189,248,.22);
       }
-      .fmz-gb-head b{font-size:13px;color:#fff}
-      .fmz-gb-head-actions{display:flex;gap:4px;align-items:center}
+      .fmz-gb-head b{font-size:13px;color:#f8fafc;letter-spacing:.02em}
+      .fmz-gb-head-actions{display:flex;gap:5px;align-items:center}
       .fmz-gb-btn{
-        background:#374151 !important;color:#fff !important;border:1px solid #6b7280;
-        border-radius:6px;padding:3px 8px;cursor:pointer;font-size:11px;font-weight:bold;
+        background:rgba(30,41,59,.9) !important;color:#f1f5f9 !important;
+        border:1px solid rgba(148,163,184,.35);
+        border-radius:7px;padding:4px 8px;min-height:26px;cursor:pointer;
+        font-size:11px;font-weight:700;
+        transition:background .12s ease,border-color .12s ease;
       }
+      .fmz-gb-btn:hover{background:rgba(51,65,85,.95) !important;border-color:#38bdf8}
       .fmz-gb-btn.primary{
-        background:#166534 !important;border-color:#22c55e;color:#fff !important;
+        background:linear-gradient(135deg,#059669,#047857) !important;
+        border-color:#34d399;color:#ecfdf5 !important;
       }
       .fmz-gb-btn.accent{
-        background:#1e3a8a !important;border-color:#3b82f6;color:#fff !important;
+        background:linear-gradient(135deg,#0284c7,#1d4ed8) !important;
+        border-color:#38bdf8;color:#f0f9ff !important;
       }
       .fmz-gb-filters{
-        display:flex;gap:4px;margin-bottom:6px;
+        display:flex;gap:5px;margin-bottom:6px;
       }
       .fmz-gb-filter-btn{
-        flex:1;background:#111827 !important;color:#cbd5e1 !important;
-        border:1px solid #374151;border-radius:6px;padding:4px 6px;
-        cursor:pointer;font-size:11px;font-weight:bold;text-align:center;
+        flex:1;background:rgba(9,15,28,.85) !important;color:#94a3b8 !important;
+        border:1px solid rgba(56,189,248,.18);border-radius:7px;padding:5px 6px;min-height:26px;
+        cursor:pointer;font-size:11px;font-weight:700;text-align:center;
+        transition:all .12s ease;
       }
       .fmz-gb-filter-btn.active{
-        background:#1e3a8a !important;color:#fff !important;border-color:#60a5fa;
+        background:rgba(8,145,178,.28) !important;color:#67e8f9 !important;
+        border-color:#22d3ee;box-shadow:0 0 10px rgba(34,211,238,.18);
       }
       .fmz-gb-status-bar{
         display:flex;justify-content:space-between;align-items:center;gap:6px;
-        font-size:11px;color:#9ca3af;margin-bottom:8px;padding:0 2px;
+        font-size:11px;color:#94a3b8;margin-bottom:8px;padding:0 2px;
       }
-      .fmz-gb-link{color:#93c5fd;text-decoration:none;font-weight:bold}
+      .fmz-gb-sync-badge{
+        display:inline-flex;align-items:center;gap:6px;color:#cbd5e1;font-weight:600;
+      }
+      .fmz-gb-sync-badge::before{
+        content:"";width:7px;height:7px;border-radius:999px;
+        background:#64748b;box-shadow:0 0 6px rgba(100,116,139,.6);
+      }
+      .fmz-gb-sync-badge.ok::before{background:#34d399;box-shadow:0 0 8px rgba(52,211,153,.85)}
+      .fmz-gb-sync-badge.syncing::before{background:#22d3ee;box-shadow:0 0 8px rgba(34,211,238,.85)}
+      .fmz-gb-sync-badge.backoff::before{background:#fbbf24;box-shadow:0 0 8px rgba(251,191,36,.8)}
+      .fmz-gb-sync-badge.error::before{background:#f87171;box-shadow:0 0 8px rgba(248,113,113,.85)}
+      .fmz-gb-link{color:#38bdf8;text-decoration:none;font-weight:700}
+      .fmz-gb-link:hover{color:#7dd3fc;text-decoration:underline}
       .fmz-gb-account-box{
-        background:#111827;border:1px solid #4b5563;border-radius:8px;
+        background:rgba(9,15,28,.88);border:1px solid rgba(56,189,248,.35);border-radius:10px;
         padding:8px;margin-bottom:8px;
       }
       .fmz-gb-account-row{display:flex;gap:6px;margin-top:6px}
       .fmz-gb-account-input{
-        flex:1;background:#1f2937;color:#fff;border:1px solid #6b7280;
-        border-radius:6px;padding:4px 7px;font-size:12px;
+        flex:1;background:#0f172a;color:#f8fafc;border:1px solid rgba(56,189,248,.4);
+        border-radius:7px;padding:5px 8px;font-size:12px;
       }
       .fmz-gb-sec{
-        background:#111827;border:1px solid #374151;border-radius:8px;
-        padding:7px 8px;margin-bottom:7px;
+        background:rgba(9,15,28,.84);border:1px solid rgba(56,189,248,.18);border-radius:10px;
+        padding:8px 9px;margin-bottom:7px;
+        box-shadow:inset 0 1px 0 rgba(255,255,255,.04);
       }
       .fmz-gb-sec:last-child{margin-bottom:0}
-      .fmz-gb-sec.danger{border-left:3px solid #ef4444}
-      .fmz-gb-sec.urgent{border-color:#ef4444;background:#231318}
-      .fmz-gb-sec.in{border-left:3px solid #22c55e}
-      .fmz-gb-sec.hunt{border-left:3px solid #f59e0b}
-      .fmz-gb-sec.out{border-left:3px solid #3b82f6}
+      .fmz-gb-sec.danger{border-left:3px solid #f87171}
+      .fmz-gb-sec.urgent{border-color:rgba(248,113,113,.65);background:rgba(69,10,10,.36)}
+      .fmz-gb-sec.in{border-left:3px solid #34d399}
+      .fmz-gb-sec.hunt{border-left:3px solid #fbbf24}
+      .fmz-gb-sec.out{border-left:3px solid #38bdf8}
       .fmz-gb-sec-title{
         display:flex;justify-content:space-between;align-items:center;
-        font-weight:bold;font-size:12px;color:#e5e7eb;
-        cursor:pointer;user-select:none;
+        font-weight:700;font-size:11px;letter-spacing:.04em;text-transform:uppercase;
+        color:#e2e8f0;cursor:pointer;user-select:none;
       }
-      .fmz-gb-sec-body{margin-top:5px}
+      .fmz-gb-sec-body{margin-top:6px}
       .fmz-gb-sec.collapsed .fmz-gb-sec-body{display:none}
-      .fmz-gb-row{padding:6px 4px;border-top:1px solid #1f2937;line-height:1.3}
-      .fmz-gb-row.soon{background:rgba(239,68,68,.12);padding:6px 6px;border-radius:6px}
-      .fmz-gb-row.targeted-me{border-left:2px solid #f87171;padding-left:6px}
-      .fmz-gb-row.will-fail{background:rgba(245,158,11,.14);border-left:2px solid #f59e0b;padding:6px 6px;border-radius:6px}
+      .fmz-gb-row{padding:6px 4px;border-top:1px solid rgba(148,163,184,.12);line-height:1.35}
+      .fmz-gb-row.soon{background:rgba(239,68,68,.14);padding:6px 7px;border-radius:8px}
+      .fmz-gb-row.targeted-me{border-left:2px solid #f87171;padding-left:7px}
+      .fmz-gb-row.will-fail{background:rgba(245,158,11,.14);border-left:2px solid #fbbf24;padding:6px 7px;border-radius:8px}
       .fmz-gb-row:first-of-type{border-top:none;padding-top:2px}
       .fmz-gb-row-top{display:flex;justify-content:space-between;align-items:center;gap:6px}
-      .fmz-gb-cd{white-space:nowrap;font-weight:bold;font-size:11px;color:#93c5fd}
-      .fmz-gb-cd.critical{color:#fca5a5;background:#7f1d1d;padding:1px 5px;border-radius:4px}
+      .fmz-gb-cd{white-space:nowrap;font-weight:700;font-size:11px;color:#67e8f9}
+      .fmz-gb-cd.critical{color:#fecaca;background:rgba(153,27,27,.85);padding:1px 6px;border-radius:5px;border:1px solid rgba(248,113,113,.5)}
       .fmz-gb-cd.warn{color:#fde68a}
-      .fmz-gb-sub{color:#9ca3af;font-size:11px;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+      .fmz-gb-sub{color:#94a3b8;font-size:11px;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
       .fmz-gb-tdc{color:#cbd5e1;font-size:11px;margin-top:2px}
-      .fmz-gb-rule{color:#86efac;font-size:11px;margin-top:2px}
-      .fmz-gb-fail{color:#fbbf24;font-size:11px;font-weight:bold;margin-top:2px}
-      .fmz-gb-empty{color:#9ca3af;font-size:11px}
-      .fmz-gb-grid2{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:5px}
-      .fmz-gb-lbl{display:block;color:#9ca3af;font-size:11px;margin-top:5px}
-      .fmz-gb-inp{
-        width:100%;background:#1f2937;color:#fff;border:1px solid #4b5563;
-        border-radius:6px;padding:5px 7px;font-size:12px;margin-top:2px;
+      .fmz-gb-rule{color:#6ee7b7;font-size:11px;margin-top:2px}
+      .fmz-gb-fail{color:#fbbf24;font-size:11px;font-weight:700;margin-top:2px}
+      .fmz-gb-prog{
+        height:4px;background:rgba(30,41,59,.9);border-radius:999px;
+        overflow:hidden;margin-top:5px;border:1px solid rgba(56,189,248,.15);
       }
-      .fmz-gb-actions{display:flex;gap:6px;margin-top:6px}
+      .fmz-gb-prog > span{
+        display:block;height:100%;
+        background:linear-gradient(90deg,#22d3ee,#34d399);
+        border-radius:999px;
+      }
+      .fmz-gb-empty{color:#94a3b8;font-size:11px}
+      .fmz-gb-grid2{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:5px}
+      .fmz-gb-lbl{display:block;color:#94a3b8;font-size:11px;margin-top:5px}
+      .fmz-gb-inp{
+        width:100%;background:#0f172a;color:#f8fafc;border:1px solid rgba(56,189,248,.32);
+        border-radius:7px;padding:5px 8px;font-size:12px;margin-top:2px;
+        font-variant-numeric:tabular-nums;
+      }
+      .fmz-gb-inp:focus{outline:none;border-color:#22d3ee}
+      .fmz-gb-actions{display:flex;gap:6px;margin-top:7px}
       .fmz-gb-actions button{flex:1}
-      .fmz-gb-msg{margin-top:6px;font-size:11px;color:#86efac}
+      .fmz-gb-msg{margin-top:6px;font-size:11px;color:#6ee7b7}
       .fmz-gb-msg.warn{color:#fca5a5}
       .fmz-gb-player{
         display:flex;justify-content:space-between;align-items:center;gap:6px;
-        width:100%;background:#111827 !important;color:#f3f4f6 !important;
-        border:1px solid #374151;border-radius:6px;padding:6px 8px;margin-bottom:4px;
+        width:100%;background:rgba(9,15,28,.86) !important;color:#f1f5f9 !important;
+        border:1px solid rgba(56,189,248,.18);border-radius:8px;padding:7px 9px;margin-bottom:5px;
         cursor:pointer;font-size:12px;text-align:left;
+        transition:border-color .12s ease,background .12s ease;
       }
-      .fmz-gb-player:hover{background:#1f2937 !important;border-color:#60a5fa}
-      .fmz-gb-player.me{border-left:3px solid #22c55e}
-      .fmz-gb-player.attacked{border-left:3px solid #ef4444}
-      .fmz-gb-player-tdc{color:#9ca3af;font-size:11px;margin-left:6px}
+      .fmz-gb-player:hover{background:rgba(15,23,42,.96) !important;border-color:#22d3ee}
+      .fmz-gb-player.me{border-left:3px solid #34d399}
+      .fmz-gb-player.attacked{border-left:3px solid #f87171}
+      .fmz-gb-player-tdc{color:#94a3b8;font-size:11px;margin-left:6px}
       .fmz-gb-badge{
-        background:#374151;color:#e5e7eb;border-radius:999px;
-        padding:1px 7px;font-size:11px;font-weight:bold;min-width:22px;text-align:center;
+        background:rgba(30,41,59,.9);color:#e2e8f0;border-radius:999px;
+        padding:2px 7px;font-size:11px;font-weight:700;min-width:22px;text-align:center;
+        border:1px solid rgba(148,163,184,.25);
       }
-      .fmz-gb-badge.alert{background:#7f1d1d;color:#fecaca;border:1px solid #ef4444}
+      .fmz-gb-badge.alert{background:rgba(153,27,27,.85);color:#fecaca;border:1px solid rgba(248,113,113,.65)}
       .fmz-gb-summary{
-        background:#111827;border:1px solid #374151;border-radius:8px;
-        padding:7px 8px;margin-bottom:7px;font-size:11px;line-height:1.5;color:#cbd5e1;
+        background:rgba(9,15,28,.88);border:1px solid rgba(56,189,248,.24);border-radius:10px;
+        padding:8px 9px;margin-bottom:7px;font-size:11px;line-height:1.55;color:#cbd5e1;
       }
     `;
     (document.head || document.body).appendChild(style);
+  }
+
+  function renderSyncStatusHtml() {
+    const st = String(syncStatus.state || "idle");
+    return `<span class="fmz-gb-sync-badge ${esc(st)}">${esc(syncStatus.label)}</span>`;
   }
 
   function ensureContainersAttached() {
@@ -2961,7 +3023,7 @@
         </div>
 
         <div class="fmz-gb-status-bar">
-          <span>${esc(syncStatus.label)}</span>
+          ${renderSyncStatusHtml()}
           <a class="fmz-gb-link" href="${esc(SHORTCUT_LINKS.membersUrl)}">📋 Membres ${OWN_ALLIANCE_TAG}</a>
         </div>
 
@@ -3019,7 +3081,7 @@
             const urgencyClass = isCritical ? "critical" : isWarn ? "warn" : "";
             const isMeTarget = samePseudo(a.target, devUser);
             const targetBadge = isMeTarget
-              ? `<span style="color:#fca5a5;font-weight:bold">${esc(a.target || "?")} (moi)</span>`
+              ? `<span style="color:#fca5a5;font-weight:700">${esc(a.target || "?")} (moi)</span>`
               : `<b>${esc(a.target || "?")}</b>`;
 
             const sentAnts = getAttackSentAnts(a);
@@ -3088,7 +3150,7 @@
         </div>
 
         <div class="fmz-gb-status-bar">
-          <span>${esc(syncStatus.label)}</span>
+          ${renderSyncStatusHtml()}
           <a class="fmz-gb-link" href="${esc(SHORTCUT_LINKS.membersUrl)}">📋 Membres (TDC)</a>
         </div>
 
@@ -3135,9 +3197,17 @@
             const wVal = dr.wood !== undefined ? dr.wood : rem.wood || 0;
             const aVal = dr.apples !== undefined ? dr.apples : rem.apples || 0;
             const hasDelivered = del.wood > 0 || del.apples > 0;
+            const totalReq = (Number(r.wood) || 0) + (Number(r.apples) || 0);
+            const totalDel = (Number(del.wood) || 0) + (Number(del.apples) || 0);
+            const pctDone = totalReq > 0 ? Math.min(100, Math.round((totalDel / totalReq) * 100)) : 0;
+
             const statusText = hasDelivered
-              ? `Livré 🪵 ${formatNumber(del.wood)} · 🍎 ${formatNumber(del.apples)} / Reste 🪵 ${formatNumber(rem.wood)} · 🍎 ${formatNumber(rem.apples)}`
+              ? `Livré 🪵 ${formatNumber(del.wood)} · 🍎 ${formatNumber(del.apples)} (${pctDone}%) / Reste 🪵 ${formatNumber(rem.wood)} · 🍎 ${formatNumber(rem.apples)}`
               : `Ouverte · Reste 🪵 ${formatNumber(rem.wood)} · 🍎 ${formatNumber(rem.apples)}`;
+
+            const progHtml = hasDelivered
+              ? `<div class="fmz-gb-prog"><span style="width:${pctDone}%"></span></div>`
+              : "";
 
             const actionBlock = ownReq
               ? `<div class="fmz-gb-sub" style="color:#fca5a5">Votre demande personnelle</div>`
@@ -3167,6 +3237,7 @@
                   <span><b>${esc(r.player)}</b> · 🪵 ${formatNumber(r.wood)} · 🍎 ${formatNumber(r.apples)}</span>
                 </div>
                 <div class="fmz-gb-tdc">${esc(statusText)}</div>
+                ${progHtml}
                 ${r.note ? `<div class="fmz-gb-sub">${esc(r.note)}</div>` : ""}
                 ${actionBlock}
               </div>
@@ -3252,7 +3323,7 @@
         </div>
 
         <div class="fmz-gb-status-bar">
-          <span>${esc(syncStatus.label)}</span>
+          ${renderSyncStatusHtml()}
           <a class="fmz-gb-link" href="/commerce.php">Page Commerce</a>
         </div>
 
@@ -3549,7 +3620,7 @@
             </div>
           </div>
           <div class="fmz-gb-status-bar">
-            <span>${esc(syncStatus.label)}</span>
+            ${renderSyncStatusHtml()}
             <a class="fmz-gb-link" href="${esc(SHORTCUT_LINKS.membersUrl)}">📋 Membres (TDC)</a>
           </div>
           ${summaryHtml}
@@ -3617,7 +3688,7 @@
           </div>
         </div>
         <div class="fmz-gb-status-bar">
-          <span>${esc(syncStatus.label)}</span>
+          ${renderSyncStatusHtml()}
           <span>Clique un joueur pour voir ses attaques</span>
         </div>
         ${rowsHtml}
@@ -3916,7 +3987,7 @@
           </div>
 
           <div class="fmz-gb-status-bar">
-            <span>${esc(syncStatus.label)}</span>
+            ${renderSyncStatusHtml()}
             ${membersLink}
           </div>
 
