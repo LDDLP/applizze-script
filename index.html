@@ -1,0 +1,2686 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Le Dôme De La Paix</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;background:#111827;color:#e5e7eb;font:14px Arial,sans-serif}
+header{background:#1f2937;padding:8px 12px;position:sticky;top:0;z-index:5}
+h1{font-size:18px;margin:0 0 2px}
+header .sub{font-size:11px}
+main{padding:12px;max-width:1100px;margin:auto}
+.panel{background:#1f2937;border:1px solid #374151;border-radius:10px;padding:13px;margin-bottom:12px}
+h2{font-size:17px;margin:0 0 12px}
+label{display:block;color:#9ca3af;margin:8px 0 5px}
+input,select,button,textarea{width:100%;padding:10px;border-radius:7px;border:1px solid #4b5563;background:#111827;color:white;font-size:14px}
+input[type="color"]{height:43px;padding:4px;cursor:pointer}
+textarea{min-height:150px;resize:vertical;line-height:1.5}
+button{background:#374151;cursor:pointer}
+button:active{opacity:.7}
+button:disabled{opacity:.6;cursor:wait}
+.primary{background:#166534;border-color:#15803d}
+.danger{background:#7f1d1d;border-color:#991b1b}
+.controls{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.result{background:#111827;border-radius:8px;padding:12px;margin-top:12px;line-height:1.8}
+.big{font-size:23px;font-weight:bold;color:#4ade80}
+.muted{color:#9ca3af;font-size:12px}
+.buttons{display:flex;gap:8px;flex-wrap:wrap}
+.buttons button{width:auto;flex:1}
+#mapwrap{background:#263f2b;border:1px solid #829b70;border-radius:10px;overflow:hidden;touch-action:none;position:relative}
+#mapwrap.map-full{position:fixed;inset:0;z-index:900;border-radius:0;background:#0b1220;display:flex;align-items:center}
+#mapClose{display:none;position:absolute;top:10px;right:10px;width:auto;z-index:2}
+#mapwrap.map-full #mapClose{display:block}
+svg{display:block;width:100%;height:auto}
+.gridline{stroke:#e6f0d7;stroke-width:.35;opacity:.25}
+.map-border{fill:none;stroke:#edf5dc;stroke-width:2.5;stroke-dasharray:6 3;pointer-events:none}
+.axis{fill:#e0ebd4;font-size:7px;opacity:.75}
+.player{cursor:pointer}
+.player circle{stroke:white;stroke-width:1.2}
+.player text{fill:white;font-size:9px;font-weight:bold;paint-order:stroke;stroke:#0b1220;stroke-width:2.2px}
+.player .nest-icon{font-size:18px;text-anchor:middle;dominant-baseline:middle;stroke:none;paint-order:normal}
+.player .rank-label{font-size:6.5px;font-weight:normal;stroke-width:1.5px}
+.player .hunt-map-label{font-size:8px;fill:#facc15;stroke-width:2px;cursor:pointer}
+.playerlist{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:9px}
+.playercard{background:#111827;border:1px solid #374151;border-radius:9px;padding:10px}
+.playercard.coord-zero{border-color:#d97706}
+.playercard input{padding:8px}
+.formgrid{display:grid;grid-template-columns:1fr 1fr;gap:9px}
+.status{margin-top:9px;color:#86efac;font-size:12px}
+.tool-heading{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:0}
+.tool-heading h2{margin:0}
+.tool-toggle,.movement-toggle{width:36px;min-width:36px;height:36px;padding:0;display:flex;align-items:center;justify-content:center;font-size:22px;font-weight:bold;border-radius:7px;background:#374151;border:1px solid #6b7280}
+.tool-toggle:hover,.movement-toggle:hover{background:#4b5563}
+.tool-content{margin-top:13px}
+.movementcard{background:#111827;border:1px solid #374151;border-radius:9px;padding:9px;margin-bottom:7px;border-left:4px solid #6b7280}
+.movementcard.attack{border-left-color:#ef4444}
+.movementcard.convoy{border-left-color:#3b82f6}
+.movementcard.hunt{border-left-color:#eab308}
+.movement-summary{display:flex;align-items:center;justify-content:space-between;gap:10px;min-height:34px}
+.movement-route{font-weight:bold;font-size:14px;overflow-wrap:anywhere;flex:1}
+.movement-details{padding-top:10px;margin-top:9px;border-top:1px solid #374151}
+.movement-title{font-weight:bold;font-size:15px;margin-bottom:7px}
+.movement-time{font-size:19px;font-weight:bold;margin:7px 0}
+.attack-text{color:#f87171}
+.convoy-text{color:#60a5fa}
+.hunt-text{color:#facc15}
+.finished-text{color:#86efac}
+.ant-path{fill:none;stroke-width:1.2;stroke-dasharray:3 2;opacity:.9;animation:dashflow .8s linear infinite}
+.ant-label{font-size:12px;text-anchor:middle;dominant-baseline:middle;paint-order:stroke;stroke:#0b1220;stroke-width:1.5px}
+.movement-actions{display:flex;gap:7px;margin-top:9px}
+.movement-actions button,.cardbuttons button{padding:8px}
+.cardbuttons{display:flex;gap:7px;margin-top:9px}
+.legend{display:flex;gap:15px;flex-wrap:wrap;margin-top:8px;font-size:12px;color:#cbd5e1}
+.quantity-box{background:#111827;border:1px solid #374151;border-radius:8px;padding:10px;margin-top:10px}
+.quantity-note{font-size:12px;color:#9ca3af;margin-top:6px}
+.movement-quantity{background:#1f2937;border-radius:7px;padding:8px;margin-top:8px;line-height:1.8}
+.movement-quantity b{color:#f9fafb}
+.import-preview{background:#111827;border:1px solid #374151;border-radius:8px;padding:10px;margin-top:10px}
+.import-item{border-bottom:1px solid #374151;padding:9px 0;line-height:1.6}
+.import-item:last-child{border-bottom:0}
+.import-error{color:#fca5a5}
+.import-ok{color:#86efac}
+.player-va,.player-rank{margin-top:9px;font-size:13px;color:#9ca3af}
+.player-va input{margin-top:5px}
+.player-card-title{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap}
+.movement-tabs{display:grid;grid-template-columns:repeat(3,1fr);gap:7px;margin-bottom:12px}
+.movement-tab{padding:10px 5px;font-weight:bold;border:1px solid #4b5563;background:#111827;color:#cbd5e1;border-radius:8px}
+.movement-tab.active{background:#374151;border-color:#9ca3af;color:white}
+.movement-tab[data-type="convoy"].active{border-bottom:3px solid #3b82f6}
+.movement-tab[data-type="attack"].active{border-bottom:3px solid #ef4444}
+.movement-tab[data-type="hunt"].active{border-bottom:3px solid #eab308}
+.modal-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.8);z-index:1000;align-items:center;justify-content:center;padding:20px}
+.modal-box{width:100%;max-width:360px;background:#1f2937;border:1px solid #4b5563;border-radius:12px;padding:20px;box-shadow:0 10px 40px #000}
+.modal-box h3{margin:0 0 8px;font-size:18px;color:#f9fafb;text-align:center}
+.modal-sub{color:#9ca3af;font-size:12px;text-align:center;margin:0 0 14px}
+.modal-box p{color:#d1d5db;line-height:1.5;margin-bottom:14px}
+.modal-buttons{display:flex;gap:10px;margin-top:14px}
+.modal-buttons button{flex:1}
+.modal-confirm{background:#7f1d1d;border-color:#991b1b}
+.sync-bar{display:flex;align-items:center;gap:8px;margin-top:6px}
+.sync-bar button{width:auto;min-width:0;padding:5px 10px;font-size:12px;white-space:nowrap;flex:none}
+#syncStatus{flex:1;min-width:0;font-size:11px;line-height:1.3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:pointer}
+#syncStatus.expanded{white-space:normal}
+.sync-info{background:#111827;border:1px solid #374151;border-radius:8px;padding:9px;margin-top:10px;line-height:1.6}
+.sync-good{color:#86efac}
+.sync-warn{color:#fbbf24}
+.sync-error{color:#fca5a5}
+.player-api{background:#1f2937;border:1px solid #374151;border-radius:7px;padding:9px;margin-top:9px;font-size:12px;line-height:1.8}
+.player-api strong{color:#f9fafb}
+.player-api .api-title{font-weight:bold;color:#93c5fd;margin-bottom:4px}
+@media(max-width:500px){
+ .movement-actions button,.movement-tab{font-size:12px}
+}
+.next-item{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:7px 9px;background:#111827;border:1px solid #374151;border-radius:8px;margin-bottom:6px}
+.next-item.soon{border-color:#f59e0b;color:#fde68a}
+.next-item b{white-space:nowrap}
+.stats-line{font-size:12px;color:#cbd5e1;margin-bottom:10px;line-height:1.7}
+.toast-wrap{position:fixed;left:10px;right:10px;bottom:14px;z-index:2000;display:flex;flex-direction:column;gap:8px;pointer-events:none}
+.toast{background:#166534;border:1px solid #22c55e;color:#fff;padding:11px 13px;border-radius:10px;box-shadow:0 6px 24px #000a;animation:toastin .25s}
+.toast.warn{background:#78350f;border-color:#f59e0b}
+.toast.err{background:#7f1d1d;border-color:#ef4444}
+@keyframes toastin{from{transform:translateY(20px);opacity:0}}
+@keyframes dashflow{to{stroke-dashoffset:-10}}
+@keyframes pulse{from{transform:scale(1);opacity:.9}to{transform:scale(3.3);opacity:0}}
+.pulse{fill:none;stroke-width:1.6;transform-box:fill-box;transform-origin:center;animation:pulse 1.6s ease-out infinite;pointer-events:none}
+.ring{fill:none;stroke:#fff;stroke-width:.8;stroke-dasharray:3 4;opacity:.5;pointer-events:none}
+.ring-label{fill:#fff;font-size:8px;opacity:.85;paint-order:stroke;stroke:#0b1220;stroke-width:2px;pointer-events:none;text-anchor:middle}
+.name-pill{fill:#0b1220;opacity:.6}
+.main-tabs{display:flex;gap:8px;max-width:1100px;margin:12px auto 0;padding:0 12px;overflow-x:auto;scrollbar-width:none}
+.main-tabs::-webkit-scrollbar{display:none}
+.main-tab{flex:1 0 auto;width:auto;white-space:nowrap;padding:12px 14px;font-weight:bold;border:1px solid #4b5563;background:#1f2937;color:#cbd5e1;border-radius:8px}
+.main-tab.active{background:#374151;color:#fff;border-color:#9ca3af;border-bottom:3px solid #3b82f6}
+.badge{display:inline-block;min-width:20px;padding:1px 6px;margin-left:5px;border-radius:10px;background:#ef4444;color:#fff;font-size:12px}
+.badge:empty{display:none}
+.req-card{background:#111827;border:1px solid #374151;border-left:4px solid #3b82f6;border-radius:9px;padding:11px;margin-bottom:9px;line-height:1.6}
+.req-card.urgent{border-left-color:#ef4444}
+.req-card.taken{border-left-color:#eab308}
+.req-card.done{border-left-color:#22c55e;opacity:.65}
+.req-head{display:flex;justify-content:space-between;gap:8px;align-items:center;flex-wrap:wrap}
+.tag{font-size:11px;padding:2px 8px;border-radius:10px;background:#374151;white-space:nowrap}
+.tag.urgent{background:#7f1d1d}.tag.taken{background:#854d0e}.tag.done{background:#166534}.tag.coord0{background:#78350f;color:#fde68a}.tag.admin{background:#1e3a8a;color:#bfdbfe}
+.req-actions{display:flex;gap:7px;flex-wrap:wrap;margin-top:9px}
+.req-actions button,.req-actions select{width:auto;flex:1;min-width:120px;padding:8px;font-size:13px}
+.req-note{background:#1f2937;border-radius:6px;padding:6px 8px;margin-top:6px;font-size:13px;color:#d1d5db}
+.req-filters{display:grid;grid-template-columns:repeat(3,1fr);gap:7px;margin-bottom:12px}
+.req-filter{padding:8px 4px;font-size:13px;font-weight:bold}
+.pname{color:#93c5fd;text-decoration:underline dotted;cursor:pointer}
+#bubble{position:fixed;z-index:1500;display:none;width:min(300px,calc(100vw - 20px));background:#1f2937;border:1px solid #6b7280;border-radius:12px;padding:12px;box-shadow:0 10px 30px #000c;line-height:1.7;font-size:13px}
+#bubble::before{content:"";position:absolute;left:var(--ax,30px);width:12px;height:12px;background:#1f2937;border:1px solid #6b7280;border-right:0;border-bottom:0;transform:rotate(45deg)}
+#bubble.below::before{top:-7px}
+#bubble.above::before{bottom:-7px;transform:rotate(225deg)}
+#bubble h4{margin:0 0 6px;font-size:16px;display:flex;justify-content:space-between;gap:8px;align-items:center}
+#bubble .bx{width:auto;padding:2px 9px;font-size:14px}
+#bubble .row{display:flex;justify-content:space-between;gap:10px;border-top:1px solid #374151;padding:2px 0}
+#bubble .row span:first-child{color:#9ca3af}
+.req-send{margin-top:8px}
+.req-send .formgrid{margin-top:4px}
+.req-filter.active{background:#374151;border-color:#9ca3af}
+.auth-bar{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:6px;padding-top:6px;border-top:1px solid #374151;flex-wrap:wrap}
+.auth-user{display:flex;align-items:center;gap:6px;font-size:12px;font-weight:bold;color:#86efac}
+.auth-actions{display:flex;gap:6px}
+.auth-bar button{width:auto;padding:4px 10px;font-size:12px}
+.auth-hint{font-size:12px;color:#9ca3af;margin-top:10px;line-height:1.45}
+.auth-mode-tabs{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px}
+.auth-mode-tab{padding:8px 6px;font-size:13px;font-weight:bold;background:#111827;border:1px solid #4b5563;color:#cbd5e1;border-radius:7px}
+.auth-mode-tab.active{background:#374151;border-color:#93c5fd;color:#fff}
+</style>
+</head>
+<body>
+
+<header>
+<h1>🐜 Le Dôme De La Paix</h1>
+<div class="sync-bar">
+ <button class="primary" id="syncNow" title="Actualiser maintenant">🔄 Actualiser</button>
+ <div id="syncStatus" class="muted" title="Toucher pour déplier">Préparation de la synchronisation...</div>
+ <div id="sharedStatus" class="muted"></div>
+</div>
+<div class="auth-bar">
+ <div class="auth-user" id="authUserDisplay">🔒 Non connecté</div>
+ <div class="auth-actions">
+  <button class="primary" id="authOpenBtn" type="button">🔑 Connexion</button>
+  <button class="danger" id="authLogoutBtn" type="button" style="display:none">Déconnexion</button>
+ </div>
+</div>
+</header>
+
+<nav class="main-tabs">
+<button class="main-tab active" data-tab="main" type="button">🏠 Accueil</button>
+<button class="main-tab" data-tab="convoy" type="button">🚚 Convois<span class="badge" id="reqBadge"></span></button>
+<button class="main-tab" data-tab="map" type="button">🗺️ Carte</button>
+<button class="main-tab" data-tab="rank" type="button">🏆 Alliance</button>
+</nav>
+
+<main>
+<div id="tabMain" style="display:none">
+<section class="panel" id="nextPanel">
+<h2>⏰ Prochaines arrivées</h2>
+<div class="stats-line" id="nextStats"></div>
+<div id="nextList"></div>
+</section>
+<section class="panel">
+<div class="tool-heading"><h2>🐎 Attaques en cours sur moi</h2>
+<button class="tool-toggle" type="button" data-toggle="incomingAttacksSection" aria-expanded="true">−</button></div>
+<div class="tool-content" id="incomingAttacksSection">
+<div class="muted" style="margin-bottom:8px">Joueur connecté : <b id="incomingAttacksTarget">--</b></div>
+<div class="stats-line" id="incomingAttacksSummary"></div>
+<div id="incomingAttacksList"></div>
+<div class="muted" id="noIncomingAttacks">Aucune attaque en cours sur toi.</div>
+</div>
+</section>
+<section class="panel">
+<div class="tool-heading"><h2>⚔️ Chasses en cours</h2>
+<button class="tool-toggle" type="button" data-toggle="activeHuntsSection" aria-expanded="true">−</button></div>
+<div class="tool-content" id="activeHuntsSection">
+<div id="activeHuntsList"></div>
+<div class="muted" id="noActiveHunts">Aucune chasse en cours.</div>
+</div>
+</section>
+</div>
+<div id="tabConvoy" style="display:none">
+<section class="panel">
+<div class="tool-heading"><h2>📬 Nouvelle demande de convoi</h2>
+<button class="tool-toggle" type="button" data-toggle="reqForm" aria-expanded="false">＋</button></div>
+<div class="tool-content" id="reqForm" style="display:none">
+<div class="muted" style="margin-bottom:8px">Demandeur reconnu automatiquement : <b id="reqPlayerLabel">--</b></div>
+<div style="display:none"><select id="reqPlayer"></select></div>
+<div class="formgrid">
+<div><label>🪵 Bois</label><input id="reqWood" type="number" min="0" step="1" placeholder="Quantité de bois"></div>
+<div><label>🍎 Pommes</label><input id="reqApples" type="number" min="0" step="1" placeholder="Quantité de pommes"></div>
+</div>
+<label>Motif de la demande</label>
+<input id="reqNote" type="text" maxlength="200" placeholder="Ex : pour finir une construction ce soir" required>
+<button class="primary" id="reqSubmit" style="margin-top:12px">📨 Envoyer la demande</button>
+</div>
+</section>
+<section class="panel">
+<h2>📋 Demandes de l'alliance</h2>
+<div class="req-filters">
+<button class="req-filter active" data-f="open" type="button">À traiter</button>
+<button class="req-filter" data-f="ongoing" type="button">🚚 En cours</button>
+<button class="req-filter" data-f="done" type="button">📦 Archives</button>
+</div>
+<div id="reqList"></div>
+<div class="buttons" style="margin-top:8px"><button class="danger" id="reqClear" type="button" style="display:none">🗑️ Vider les archives</button></div>
+</section>
+</div>
+<div id="tabMap" style="display:none">
+<section class="panel">
+<h2>Carte de l'alliance</h2>
+<div class="buttons">
+<button id="zoomIn">＋ Zoom</button>
+<button id="zoomOut">－ Dézoom</button>
+<button id="reset">Recentrer</button>
+</div>
+<div class="buttons" style="margin-top:8px"><button id="fullMap">⛶ Plein écran</button></div>
+<select id="goPlayer" style="margin-top:10px"></select>
+<div id="mapwrap" style="margin-top:10px"><button id="mapClose" type="button">✕ Fermer</button><svg id="map" viewBox="0 0 900 560"><g id="scene"></g></svg></div>
+<div class="legend"><span>🔴 Chasseur</span><span>🟢 Grenier</span><span>🟡 Passeur</span><span>🟠 Coordonnées (0,0) à vérifier</span><span>⭕ Cercles = temps de trajet</span></div>
+
+</section>
+<section class="panel">
+<div class="tool-heading"><h2>🧮 Calcul d'un trajet</h2>
+<button class="tool-toggle" type="button" data-toggle="calculator" aria-expanded="false">＋</button></div>
+<div class="tool-content" id="calculator" style="display:none">
+<div class="controls">
+<div><label>Joueur de départ</label><select id="origin"></select></div>
+<div><label>Joueur d'arrivée</label><select id="destination"></select></div>
+</div>
+<div class="result" id="result">Sélectionne deux joueurs.</div>
+</div>
+</section>
+</div>
+<div id="tabRank" style="display:block">
+<section class="panel">
+<h2>🏆 [LDDLP]</h2>
+<div id="rankList"></div>
+</section>
+<section class="panel">
+<div class="tool-heading"><h2>⚔️ Attaques lancées sur les 30 derniers jours</h2>
+<button class="tool-toggle" type="button" data-toggle="attacksStatsSection" aria-expanded="false">＋</button></div>
+<div class="tool-content" id="attacksStatsSection" style="display:none">
+<div id="attacksStatsList"></div>
+
+</div>
+</section>
+<section class="panel">
+<div class="tool-heading"><h2>🏞️ Terrain récupéré sur les 30 derniers jours</h2>
+<button class="tool-toggle" type="button" data-toggle="terrainStatsSection" aria-expanded="false">＋</button></div>
+<div class="tool-content" id="terrainStatsSection" style="display:none">
+<div id="terrainStatsList"></div>
+
+</div>
+</section>
+<section class="panel">
+<div class="tool-heading"><h2>📊 Reçu sur les 30 derniers jours</h2>
+<button class="tool-toggle" type="button" data-toggle="recvSection" aria-expanded="false">＋</button></div>
+<div class="tool-content" id="recvSection" style="display:none">
+<div id="recvList"></div>
+
+</div>
+</section>
+<section class="panel">
+<div class="tool-heading"><h2>📤 Envoyé sur les 30 derniers jours</h2>
+<button class="tool-toggle" type="button" data-toggle="sentSection" aria-expanded="false">＋</button></div>
+<div class="tool-content" id="sentSection" style="display:none">
+<div id="sentList"></div>
+
+</div>
+</section>
+<section class="panel">
+<div class="tool-heading"><h2>👥 Fiches joueurs</h2>
+<button class="tool-toggle" type="button" data-toggle="playerSection" aria-expanded="false">＋</button></div>
+<div class="tool-content" id="playerSection" style="display:none">
+
+<div class="playerlist" id="playerlist"></div>
+<div class="status" id="saveStatus">Sauvegarde locale activée.</div>
+</div>
+</section>
+</div>
+<div hidden id="legacyPanels">
+<div id="tabHunters"></div><div id="tabStats"></div><div id="tabPlayers"></div>
+<section class="panel">
+<div class="tool-heading"><h2>📥 Importées des déplacements (Chasses)</h2>
+<button class="tool-toggle" type="button" data-toggle="importer" aria-expanded="true">−</button></div>
+<div class="tool-content" id="importer">
+<div class="muted">Colle directement le texte de chasse copié depuis Fourmizzz. Les liens et le bouton Annuler ne sont pas nécessaires.</div>
+<div class="muted" style="margin-top:8px">Joueur à l'origine reconnu automatiquement : <b id="importOriginLabel">--</b></div>
+<div style="display:none"><select id="importOrigin"></select></div>
+<label>Texte de chasse copié depuis Fourmizzz</label>
+<textarea id="importText" placeholder="Colle ici tes chasses (ex : Vos chasseuses vont conquérir ...)..."></textarea>
+<div class="buttons" style="margin-top:10px">
+<button class="primary" id="analyzeImport">🔎 Analyser</button>
+<button id="clearImport">Effacer</button>
+</div>
+<div id="importPreview" class="import-preview" style="display:none"></div>
+<button class="primary" id="confirmImport" style="display:none;margin-top:10px">✓ Importer les chasses</button>
+<div class="quantity-note">Seules les chasses sont importées ici et associées au joueur sélectionné comme origine.</div>
+</div>
+</section>
+<section class="panel">
+<div class="tool-heading"><h2>🐎 Déclarer une attaque</h2>
+<button class="tool-toggle" type="button" data-toggle="declare" aria-expanded="false">＋</button></div>
+<div class="tool-content" id="declare" style="display:none">
+<div class="muted" style="margin-bottom:8px">Joueur de départ reconnu automatiquement : <b id="attackOriginLabel">--</b></div>
+<div style="display:none"><select id="moveOrigin"></select></div>
+<div><label>Joueur d'arrivée</label><select id="moveDestination"></select></div>
+<div class="quantity-box" id="attackFields">
+<label>🐜 Nombre de fourmis envoyées</label>
+<input id="attackAnts" type="number" min="1" step="1" placeholder="Ex : 150000">
+<div class="quantity-note">1 fourmi = 1 TDC.</div>
+</div>
+<div class="result" id="moveEstimate" style="margin-top:12px;padding:10px">--</div>
+<button class="primary" id="launchMove" style="margin-top:12px">🚀 Lancer l'attaque</button>
+<div class="muted" style="margin-top:8px">Le temps est calculé automatiquement avec la vitesse d'attaque du joueur de départ.</div>
+</div>
+</section>
+<section class="panel">
+<div class="tool-heading"><h2>📋 Historique des déplacements</h2>
+<button class="tool-toggle" type="button" data-toggle="historySection" aria-expanded="false">＋</button></div>
+<div class="tool-content" id="historySection" style="display:none">
+<div id="finishedMovements"></div>
+<div class="muted" id="noFinished">Aucun déplacement terminé pour le moment.</div>
+<button id="clearFinished" class="danger" style="margin-top:10px;display:none">Effacer les déplacements terminés</button>
+</div>
+</section>
+<section class="panel" id="backupPanel">
+<div class="tool-heading"><h2>💾 Sauvegarde des données</h2>
+<button class="tool-toggle" type="button" data-toggle="backupSection" aria-expanded="false">＋</button></div>
+<div class="tool-content" id="backupSection" style="display:none">
+<div class="buttons">
+<button id="exportData">⬇️ Exporter</button>
+<button id="importData">⬆️ Restaurer</button>
+</div>
+<input type="file" id="importFile" accept="application/json,.json" style="display:none">
+<div class="quantity-note">Exporte un fichier JSON (joueurs, vitesse d'attaque, rangs, déplacements) pour changer d'appareil ou te protéger d'une perte de données.</div>
+</div>
+</section>
+<section class="panel">
+<div class="tool-heading"><h2>📡 Déplacements en cours</h2>
+<button class="tool-toggle" type="button" data-toggle="activeSection" aria-expanded="false">＋</button></div>
+<div class="tool-content" id="activeSection" style="display:none">
+<div class="movement-tabs">
+<button class="movement-tab active" data-type="convoy">📦 Convois</button>
+<button class="movement-tab" data-type="attack">🐎 Attaques</button>
+<button class="movement-tab" data-type="hunt">⚔️ Chasses</button>
+</div>
+<div id="activeMovements"></div>
+<button id="copySummary" style="margin-top:10px">📋 Copier le résumé (Discord)</button>
+<div class="muted" id="noMovements">Aucun déplacement enregistré.</div>
+</div>
+</section>
+<section class="panel">
+<div class="tool-heading"><h2>🚚 Déclarer un convoi</h2>
+<button class="tool-toggle" type="button" data-toggle="declareConvoy" aria-expanded="false">＋</button></div>
+<div class="tool-content" id="declareConvoy" style="display:none">
+<div class="formgrid">
+<div style="display:none"><select id="cvOrigin"></select></div>
+<div class="muted" style="grid-column:1/-1">Joueur de départ reconnu automatiquement : <b id="cvOriginLabel">--</b></div>
+<div><label>Joueur d'arrivée</label><select id="cvDestination"></select></div>
+</div>
+<div class="quantity-box" id="convoyFields">
+<div class="formgrid">
+<div><label>🪵 Quantité :</label><input id="convoyWood" type="number" min="0" step="1" placeholder="Quantité"></div>
+<div><label>🍎 Quantité :</label><input id="convoyApples" type="number" min="0" step="1" placeholder="Quantité"></div>
+</div>
+<div class="quantity-note">Tu peux renseigner les deux ressources ou une seule.</div>
+</div>
+<div class="result" id="cvEstimate" style="margin-top:12px;padding:10px">--</div>
+<button class="primary" id="launchConvoy" style="margin-top:12px">🚀 Lancer le convoi</button>
+<div class="muted" style="margin-top:8px">Le temps est calculé automatiquement avec la vitesse d'attaque du joueur de départ.</div>
+</div>
+</section>
+<section class="panel" id="addPlayerPanel">
+<h2>Ajouter un joueur</h2>
+<div class="formgrid">
+<div><label>Pseudo</label><input id="newName" placeholder="Ex : Nouveau joueur"></div>
+<div><label>Coordonnée X</label><input id="newX" type="number" placeholder="X"></div>
+<div><label>Coordonnée Y</label><input id="newY" type="number" placeholder="Y"></div>
+<div><label>Vitesse d'attaque</label><input id="newVA" type="number" min="0" max="20" value="0"></div>
+</div>
+<div class="buttons" style="margin-top:12px"><button class="primary" id="savePlayer">＋ Ajouter le joueur</button></div>
+<div class="muted" id="formMessage"></div>
+</section>
+<section class="panel">
+<h2>ℹ️ Données de synchronisation</h2>
+<div class="sync-info">
+Les données sont récupérées depuis l'export public de Fourmizzz S5 via le relais Cloudflare.<br>
+<strong>TDC :</strong> terrain de chasse en cm².<br>
+<strong>Score bâtiments :</strong> score cumulé des niveaux de bâtiments.<br>
+<strong>Score technologie :</strong> score cumulé des technologies.<br><br>
+Les scores bâtiments et technologies ne donnent pas le détail de chaque niveau.
+L'export Fourmizzz est actualisé environ toutes les heures.
+</div>
+</section>
+</div>
+</main>
+
+<div class="toast-wrap" id="toasts"></div>
+<div id="bubble" role="dialog"></div>
+
+<div class="modal-overlay" id="authModal">
+<div class="modal-box">
+<h3>🐜 Le Dôme De La Paix</h3>
+<div class="modal-sub">Connexion sécurisée via le relais de l'alliance</div>
+
+<div class="auth-mode-tabs">
+<button type="button" class="auth-mode-tab active" data-auth-mode="member">👥 Membre</button>
+<button type="button" class="auth-mode-tab" data-auth-mode="admin">🛡️ Administrateur</button>
+</div>
+
+<form id="authLoginForm">
+<div id="authMemberSection">
+<label for="authMemberSelect">Membre de l'alliance</label>
+<select id="authMemberSelect"></select>
+
+<div id="authRegisterFields">
+<label for="authRegPass">Créer un mot de passe (4 caractères min.)</label>
+<input id="authRegPass" type="password" autocomplete="new-password" placeholder="4 caractères minimum">
+<label for="authRegConfirm">Confirmer le mot de passe</label>
+<input id="authRegConfirm" type="password" autocomplete="new-password" placeholder="Répète ton mot de passe">
+<div class="auth-hint" id="authHintText">Première connexion : ton mot de passe sera chiffré et enregistré sur le Worker.</div>
+</div>
+
+<div id="authLoginFields" style="display:none">
+<label for="authPassword">Mot de passe</label>
+<input id="authPassword" type="password" autocomplete="current-password" placeholder="Entre ton mot de passe">
+<div class="auth-hint" id="authLockedHintText">Ce pseudo est verrouillé par un mot de passe sur le Worker.</div>
+</div>
+</div>
+
+<div id="authAdminSection" style="display:none">
+<label for="authAdminPseudo">Pseudo affichable (optionnel)</label>
+<input id="authAdminPseudo" type="text" autocomplete="username" placeholder="Ex : Administrateur">
+<label for="authAdminPassword">Mot de passe administrateur</label>
+<input id="authAdminPassword" type="password" autocomplete="current-password" placeholder="Mot de passe administrateur">
+<div class="auth-hint">Vérifié uniquement côté Worker. Donne l'accès administrateur complet.</div>
+</div>
+
+<div id="authError" class="sync-error" style="margin-top:8px;min-height:16px"></div>
+<button type="submit" class="primary" id="authSubmitBtn" style="margin-top:12px">✓ Créer mon accès et entrer</button>
+<button type="button" id="authCancelBtn" style="margin-top:8px">Annuler</button>
+</form>
+</div>
+</div>
+
+<div class="modal-overlay" id="confirmModal">
+<div class="modal-box">
+<h3>⚠️ Confirmation</h3>
+<p id="confirmMessage">Supprimer ce déplacement ?</p>
+<div class="modal-buttons">
+<button class="modal-cancel" id="confirmNo">Retour</button>
+<button class="modal-confirm" id="confirmYes">Confirmer</button>
+</div>
+</div>
+</div>
+
+<script>
+// ======================================================
+// PARTIE 1 : AUTHENTIFICATION WORKER, DONNÉES & DROITS
+// ======================================================
+const FOURMIZZZ_PROXY="https://applizze-worker.devreuxbenoit571.workers.dev";
+const AUTH_STATUS_URL=FOURMIZZZ_PROXY+"/api/auth/users";
+const AUTH_REGISTER_URL=FOURMIZZZ_PROXY+"/api/auth/register";
+const AUTH_LOGIN_URL=FOURMIZZZ_PROXY+"/api/auth/login";
+const AUTH_SESSION_URL=FOURMIZZZ_PROXY+"/api/auth/session";
+const AUTH_LOGOUT_URL=FOURMIZZZ_PROXY+"/api/auth/logout";
+const AUTH_TOKEN_KEY="fourmizzz_auth_token_v1";
+const AUTH_USER_KEY="fourmizzz_auth_user_v1";
+
+const defaultPlayers=[
+{name:"Peps",x:80,y:52,va:0},{name:"Blue59",x:27,y:41,va:0},{name:"Legrotteuh",x:30,y:43,va:0},
+{name:"Silas88",x:2,y:47,va:0},{name:"GrenouilleQc101",x:95,y:40,va:0},{name:"Hydci",x:37,y:41,va:0},
+{name:"Scrimey",x:0,y:54,va:0},{name:"Roiscorpion",x:93,y:39,va:0},{name:"Mick",x:2,y:77,va:0},
+{name:"Belphegor",x:48,y:56,va:0},{name:"Eldindon",x:98,y:48,va:0},{name:"Disco",x:17,y:80,va:0},
+{name:"Halfou",x:15,y:79,va:0},{name:"spartiate61",x:95,y:45,va:0},{name:"DEADKAT",x:35,y:81,va:0},
+{name:"Nyfarix",x:77,y:84,va:0},{name:"Atiraya",x:68,y:82,va:0},{name:"Ange",x:25,y:79,va:0},
+{name:"Hantiz",x:84,y:78,va:0},{name:"Arktik22",x:68,y:1,va:0},{name:"gireg",x:90,y:40,va:0}
+];
+
+let players=[],movements=[],selectedOrigin=-1,selectedDestination=-1;
+let activeMovementTab="convoy";
+let convoyRequests=[],reqFilter="open";
+try{const r=JSON.parse(localStorage.getItem("fourmizzz_convoy_requests_v1")||"[]");if(Array.isArray(r))convoyRequests=r;}catch(e){}
+let convoyLog=[];
+try{const l=JSON.parse(localStorage.getItem("fourmizzz_convoy_log_v1")||"[]");if(Array.isArray(l))convoyLog=l;}catch(e){}
+convoyRequests.forEach(r=>{if(!Array.isArray(r.deliveries))r.deliveries=[];});
+const DAY30=30*86400*1000;
+function safeSet(key,value){try{localStorage.setItem(key,value);return true;}catch(e){return false;}}
+function safeRemove(key){try{localStorage.removeItem(key);}catch(e){}}
+function saveLog(){safeSet("fourmizzz_convoy_log_v1",JSON.stringify(convoyLog));}
+function pruneLog(){const lim=Date.now()-DAY30-86400000;const n=convoyLog.length;convoyLog=convoyLog.filter(e=>e.arrivalAt>=lim);if(convoyLog.length!==n)saveLog();}
+function removeConvoyLogForMovement(movement){
+ if(!movement||movement.type!=="convoy")return;
+ const before=convoyLog.length;
+ convoyLog=convoyLog.filter(e=>{
+  if(movement.id&&e.movementId)return e.movementId!==movement.id;
+  return !(e.from===movement.from?.name&&e.to===movement.to?.name&&e.arrivalAt===movement.arrivalAt);
+ });
+ if(convoyLog.length!==before)saveLog();
+}
+function received30(name){
+ const now=Date.now();let wood=0,apples=0;
+ for(const e of convoyLog)if(e.to===name&&e.arrivalAt<=now&&e.arrivalAt>=now-DAY30){wood+=e.wood||0;apples+=e.apples||0;}
+ return{wood,apples};
+}
+function sent30(name){
+ const now=Date.now();let wood=0,apples=0;
+ for(const e of convoyLog)if(e.from===name&&e.arrivalAt<=now&&e.arrivalAt>=now-DAY30){wood+=e.wood||0;apples+=e.apples||0;}
+ return{wood,apples};
+}
+function saveRequests(){if(!safeSet("fourmizzz_convoy_requests_v1",JSON.stringify(convoyRequests)))notify("Impossible de sauvegarder les demandes.","err");}
+
+const expandedMovements=new Set();
+const movementCountdownNodes=new Map();
+const nextCountdownNodes=new Map();
+let playerListSignature=null;
+let nextArrivalAt=Infinity;
+const DEFAULT_PLAYER_COLOR="#9ca3af";
+const $=id=>document.getElementById(id);
+const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+
+function notify(message,kind="ok"){
+ const box=document.createElement("div");
+ box.className="toast"+(kind==="warn"?" warn":kind==="err"?" err":"");
+ box.textContent=message;
+ $("toasts").appendChild(box);
+ if(kind==="ok"&&navigator.vibrate)navigator.vibrate([120,60,120]);
+ setTimeout(()=>box.remove(),4500);
+}
+
+function isCoordsZero(p){
+ return Number(p?.x)===0&&Number(p?.y)===0;
+}
+
+function normalizeNameKey(raw){
+ return String(raw||"").replace(/\([^)]*\)/g,"").trim().toLocaleLowerCase("fr-FR");
+}
+
+function normalizeLocalPlayer(p){
+ if(!p.color)p.color=DEFAULT_PLAYER_COLOR;
+ if(p.rank===undefined||p.rank===null)p.rank="";
+ p.x=Number.isFinite(Number(p.x))?Number(p.x):0;
+ p.y=Number.isFinite(Number(p.y))?Number(p.y):0;
+ p.va=Number.isFinite(Number(p.va))?Math.max(0,Math.min(20,Math.floor(Number(p.va)))):0;
+ for(const k of ["fourmizzzId","tdc","buildingScore","technologyScore","alliance","grade","onHoliday","isBanned"]){
+  if(p[k]===undefined)p[k]=null;
+ }
+ return p;
+}
+
+try{
+ const saved=localStorage.getItem("fourmizzz_players_v4");
+ if(saved){
+  const old=JSON.parse(saved);if(!Array.isArray(old))throw new Error();
+  // La liste de référence fait foi ; on ne garde de l'ancienne sauvegarde que la vitesse d'attaque.
+  const key=n=>String(n||"").replace(/\([^)]*\)/g,"").trim().toLowerCase();
+  players=defaultPlayers.map(d=>{const o=old.find(p=>key(p.name)===key(d.name));return {...d,va:o&&Number.isFinite(Number(o.va))?Number(o.va):d.va};});
+ }
+ else players=defaultPlayers.map(p=>({...p}));
+}catch(e){players=defaultPlayers.map(p=>({...p}));}
+players.forEach(normalizeLocalPlayer);
+
+try{
+ const savedMoves=localStorage.getItem("fourmizzz_movements_v5");
+ if(savedMoves){movements=JSON.parse(savedMoves);if(!Array.isArray(movements))movements=[];}
+}catch(e){movements=[];}
+
+let authState={
+ authenticated:false,
+ user:"",
+ role:"guest",
+ token:localStorage.getItem(AUTH_TOKEN_KEY)||""
+};
+try{
+ const cachedUser=JSON.parse(localStorage.getItem(AUTH_USER_KEY)||"null");
+ if(cachedUser&&cachedUser.pseudo){
+  authState.user=String(cachedUser.pseudo);
+  authState.role=String(cachedUser.role||"member");
+ }
+}catch(e){}
+
+let currentUser=authState.authenticated?authState.user:"";
+let registeredPseudos=new Set();
+let authLoginMode="member";
+
+function isAuthenticated(){
+ return Boolean(authState.authenticated&&currentUser);
+}
+
+function isAdmin(){
+ if(!isAuthenticated())return false;
+ const r=String(authState.role||"").toLowerCase();
+ return r==="admin"||r==="administrator"||r==="leader"||r==="owner";
+}
+
+function canManageMovement(m){
+ if(!isAuthenticated())return false;
+ if(isAdmin())return true;
+ const actor=normalizeNameKey(currentUser);
+ return actor&&(normalizeNameKey(m?.createdBy)===actor||normalizeNameKey(m?.from?.name)===actor||normalizeNameKey(m?.to?.name)===actor);
+}
+
+function canArchiveRequest(r){
+ if(!isAuthenticated())return false;
+ if(isAdmin())return true;
+ const actor=normalizeNameKey(currentUser);
+ return actor&&(normalizeNameKey(r?.player)===actor||normalizeNameKey(r?.createdBy)===actor);
+}
+
+function canDeletePlayer(){
+ return isAdmin();
+}
+
+function getAuthHeaders(extra={}){
+ const headers={"Content-Type":"application/json",...extra};
+ if(authState.token)headers["Authorization"]="Bearer "+authState.token;
+ return headers;
+}
+
+async function apiRelayAction(path,payload){
+ if(!authState.token&&!authState.authenticated)return {ok:false,skipped:true};
+ try{
+  const res=await fetch(FOURMIZZZ_PROXY+path,{
+   method:"POST",
+   headers:getAuthHeaders(),
+   body:JSON.stringify(payload||{})
+  });
+  const data=await res.json().catch(()=>({}));
+  if(!res.ok){
+   return {ok:false,status:res.status,error:data?.error||data?.message||("HTTP "+res.status)};
+  }
+  return {ok:true,data};
+ }catch(e){
+  return {ok:false,network:true,error:e.message};
+ }
+}
+
+function renderAuthBar(){
+ const disp=$("authUserDisplay");
+ const openBtn=$("authOpenBtn");
+ const logoutBtn=$("authLogoutBtn");
+ if(!disp||!openBtn||!logoutBtn)return;
+ if(isAuthenticated()){
+  const adminBadge=isAdmin()?' <span class="tag admin">Admin</span>':' <span class="tag">Membre</span>';
+  disp.innerHTML=`🟢 Connecté : <u>${esc(currentUser)}</u>${adminBadge}`;
+  openBtn.style.display="none";
+  logoutBtn.style.display="";
+ }else{
+  disp.innerHTML=`🔒 Non connecté <span class="tag">Lecture seule</span>`;
+  openBtn.style.display="";
+  logoutBtn.style.display="none";
+ }
+}
+
+function isPseudoRegistered(pseudo){
+ return registeredPseudos.has(normalizeNameKey(pseudo));
+}
+
+function populateAuthMemberSelect(preferredPseudo=""){
+ const sel=$("authMemberSelect");
+ if(!sel)return;
+ const seen=new Set();
+ const names=[];
+ for(const p of players){
+  const k=normalizeNameKey(p.name);
+  if(k&&!seen.has(k)){seen.add(k);names.push(p.name);}
+ }
+ for(const reg of registeredPseudos){
+  const k=normalizeNameKey(reg);
+  if(k&&!seen.has(k)){seen.add(k);names.push(reg);}
+ }
+ sel.innerHTML=names.map(name=>{
+  const locked=isPseudoRegistered(name);
+  const tag=locked?"Compte verrouillé":"Nouveau compte";
+  return `<option value="${esc(name)}">${esc(name)} (${tag})</option>`;
+ }).join("");
+ const targetKey=normalizeNameKey(preferredPseudo||currentUser);
+ if(targetKey){
+  const match=Array.from(sel.options).find(o=>normalizeNameKey(o.value)===targetKey);
+  if(match)sel.value=match.value;
+ }
+ syncAuthModalMode();
+}
+
+function setAuthLoginMode(mode){
+ authLoginMode=mode==="admin"?"admin":"member";
+ document.querySelectorAll(".auth-mode-tab").forEach(btn=>{
+  btn.classList.toggle("active",btn.dataset.authMode===authLoginMode);
+ });
+ $("authMemberSection").style.display=authLoginMode==="member"?"block":"none";
+ $("authAdminSection").style.display=authLoginMode==="admin"?"block":"none";
+ $("authError").textContent="";
+ syncAuthModalMode();
+}
+
+function syncAuthModalMode(){
+ if(authLoginMode==="admin"){
+  $("authSubmitBtn").textContent="🛡️ Connexion administrateur";
+  return;
+ }
+ const sel=$("authMemberSelect");
+ if(!sel)return;
+ const pseudo=sel.value;
+ const locked=isPseudoRegistered(pseudo);
+ $("authRegisterFields").style.display=locked?"none":"block";
+ $("authLoginFields").style.display=locked?"block":"none";
+ $("authSubmitBtn").textContent=locked?"🔑 Se connecter":"✓ Créer mon accès et entrer";
+ $("authHintText").textContent=`Première connexion pour ${pseudo} : ton mot de passe sera chiffré et enregistré sur le Worker.`;
+ $("authLockedHintText").textContent=`Le pseudo ${pseudo} est déjà verrouillé : entre ton mot de passe pour y accéder.`;
+}
+
+async function refreshRegisteredUsers(){
+ try{
+  const res=await fetch(AUTH_STATUS_URL,{method:"GET",cache:"no-store"});
+  if(!res.ok)return;
+  const data=await res.json().catch(()=>({}));
+  const list=Array.isArray(data?.users)?data.users:(Array.isArray(data?.registered)?data.registered:[]);
+  const nextSet=new Set();
+  for(const item of list){
+   const pseudo=typeof item==="string"?item:(item?.pseudo||item?.name||"");
+   const hasPass=typeof item==="string"?true:(item?.hasPassword!==false&&item?.registered!==false);
+   if(pseudo&&hasPass)nextSet.add(normalizeNameKey(pseudo));
+  }
+  registeredPseudos=nextSet;
+  if($("authModal")?.style.display==="flex"&&authLoginMode==="member"){
+   populateAuthMemberSelect($("authMemberSelect").value);
+  }
+ }catch(e){}
+}
+
+function openAuthModal(prefillPseudo="",initialMode="member"){
+ const modal=$("authModal");
+ if(!modal)return;
+ $("authRegPass").value="";
+ $("authRegConfirm").value="";
+ $("authPassword").value="";
+ $("authAdminPseudo").value="";
+ $("authAdminPassword").value="";
+ $("authError").textContent="";
+ setAuthLoginMode(initialMode);
+ populateAuthMemberSelect(prefillPseudo||currentUser||"");
+ modal.style.display="flex";
+ refreshRegisteredUsers();
+ setTimeout(()=>{
+  if(authLoginMode==="admin"){
+   $("authAdminPassword").focus();
+  }else{
+   ($("authRegisterFields").style.display==="none"?$("authPassword"):$("authRegPass")).focus();
+  }
+ },30);
+}
+
+function closeAuthModal(){
+ const modal=$("authModal");
+ if(modal)modal.style.display="none";
+ $("authError").textContent="";
+}
+
+function applySessionPayload(data){
+ const pseudo=String(data?.user?.pseudo||data?.pseudo||data?.username||"").trim();
+ if(!pseudo)return false;
+ authState.authenticated=true;
+ authState.user=pseudo;
+ authState.role=String(data?.user?.role||data?.role||"member");
+ currentUser=pseudo;
+ if(authState.role!=="admin"){
+  registeredPseudos.add(normalizeNameKey(pseudo));
+ }
+ safeSet(AUTH_USER_KEY,JSON.stringify({pseudo:authState.user,role:authState.role}));
+ renderAuthBar();
+ update(true);
+ return true;
+}
+
+function clearAuthSession(notifyUser=false){
+ authState.authenticated=false;
+ authState.user="";
+ authState.role="guest";
+ authState.token="";
+ currentUser="";
+ safeRemove(AUTH_TOKEN_KEY);
+ safeRemove(AUTH_USER_KEY);
+ renderAuthBar();
+ update(true);
+ if(notifyUser)notify("🔒 Déconnecté.");
+}
+
+async function checkWorkerSession(){
+ refreshRegisteredUsers();
+ if(!authState.token&&!authState.user){
+  clearAuthSession(false);
+  return;
+ }
+ try{
+  const res=await fetch(AUTH_SESSION_URL,{
+   method:"GET",
+   cache:"no-store",
+   headers:getAuthHeaders()
+  });
+  if(!res.ok){
+   clearAuthSession(false);
+   return;
+  }
+  const data=await res.json().catch(()=>({}));
+  if(data&&data.authenticated===false){
+   clearAuthSession(false);
+   return;
+  }
+  if(!applySessionPayload(data)){
+   clearAuthSession(false);
+  }
+ }catch(e){
+  if(authState.token&&authState.user){
+   authState.authenticated=true;
+   currentUser=authState.user;
+   renderAuthBar();
+   update(true);
+  }else{
+   clearAuthSession(false);
+  }
+ }
+}
+
+document.querySelectorAll(".auth-mode-tab").forEach(btn=>{
+ btn.addEventListener("click",()=>setAuthLoginMode(btn.dataset.authMode));
+});
+$("authOpenBtn").addEventListener("click",()=>openAuthModal(currentUser||"","member"));
+$("authCancelBtn").addEventListener("click",closeAuthModal);
+$("authModal").addEventListener("click",e=>{if(e.target===$("authModal"))closeAuthModal();});
+$("authMemberSelect").addEventListener("change",syncAuthModalMode);
+
+$("authLogoutBtn").addEventListener("click",async()=>{
+ const token=authState.token;
+ clearAuthSession(true);
+ if(token){
+  try{
+   await fetch(AUTH_LOGOUT_URL,{
+    method:"POST",
+    headers:{"Content-Type":"application/json","Authorization":"Bearer "+token}
+   });
+  }catch(e){}
+ }
+});
+
+$("authLoginForm").addEventListener("submit",async e=>{
+ e.preventDefault();
+ const errBox=$("authError");
+ const submitBtn=$("authSubmitBtn");
+ errBox.textContent="";
+
+ let url=AUTH_LOGIN_URL;
+ let body={};
+ let locked=false;
+ let pseudo="";
+
+ if(authLoginMode==="admin"){
+  const adminPass=$("authAdminPassword").value;
+  if(!adminPass){
+   errBox.textContent="Entre le mot de passe administrateur.";
+   return;
+  }
+  pseudo=$("authAdminPseudo").value.trim()||"Administrateur";
+  body={mode:"admin",pseudo,password:adminPass};
+ }else{
+  pseudo=$("authMemberSelect").value.trim();
+  if(!pseudo){
+   errBox.textContent="Choisis ton pseudo dans la liste.";
+   return;
+  }
+  locked=isPseudoRegistered(pseudo);
+  body={mode:"member",pseudo};
+  if(locked){
+   const password=$("authPassword").value;
+   if(!password){
+    errBox.textContent="Entre ton mot de passe.";
+    return;
+   }
+   body.password=password;
+  }else{
+   const pass=$("authRegPass").value;
+   const confirm=$("authRegConfirm").value;
+   if(pass.length<4){
+    errBox.textContent="Le mot de passe doit contenir au moins 4 caractères.";
+    return;
+   }
+   if(pass!==confirm){
+    errBox.textContent="Les deux mots de passe ne correspondent pas.";
+    return;
+   }
+   url=AUTH_REGISTER_URL;
+   body.password=pass;
+  }
+ }
+
+ submitBtn.disabled=true;
+ submitBtn.textContent="Connexion...";
+ try{
+  const res=await fetch(url,{
+   method:"POST",
+   headers:{"Content-Type":"application/json"},
+   body:JSON.stringify(body)
+  });
+  const data=await res.json().catch(()=>({}));
+  if(!res.ok||data?.authenticated===false){
+   if(authLoginMode==="member"&&(res.status===409||/existe|déjà|registered|locked/i.test(String(data?.error||data?.message||"")))){
+    registeredPseudos.add(normalizeNameKey(pseudo));
+    syncAuthModalMode();
+   }
+   errBox.textContent=data?.error||data?.message||(authLoginMode==="admin"?"Mot de passe administrateur incorrect.":(locked?"Mot de passe incorrect.":"Impossible de créer l'accès."));
+   return;
+  }
+  if(data.token){
+   authState.token=String(data.token);
+   safeSet(AUTH_TOKEN_KEY,authState.token);
+  }
+  if(!applySessionPayload(data)){
+   authState.authenticated=true;
+   authState.user=pseudo;
+   authState.role=authLoginMode==="admin"?"admin":String(data?.role||"member");
+   currentUser=pseudo;
+   if(authState.role!=="admin")registeredPseudos.add(normalizeNameKey(pseudo));
+   safeSet(AUTH_USER_KEY,JSON.stringify({pseudo:authState.user,role:authState.role}));
+   renderAuthBar();
+   update(true);
+  }
+  closeAuthModal();
+  pullShared(true);
+  if(authState.role==="admin"){
+   notify("🛡️ Connecté en tant qu'administrateur ("+currentUser+").");
+  }else{
+   notify(locked?("🔑 Connecté en tant que "+currentUser+"."):("🔒 Compte créé et verrouillé pour "+currentUser+"."));
+  }
+ }catch(err){
+  errBox.textContent="Erreur réseau : "+err.message;
+ }finally{
+  submitBtn.disabled=false;
+  syncAuthModalMode();
+ }
+});
+
+function requireAuth(actionLabel="effectuer cette action"){
+ if(isAuthenticated())return true;
+ notify("Connexion requise pour "+actionLabel+".","warn");
+ openAuthModal();
+ return false;
+}
+
+function getIdentifiedPlayerIndex(){
+ if(!currentUser||!players.length)return -1;
+ const targetKey=normalizeNameKey(currentUser);
+ return players.findIndex(p=>normalizeNameKey(p.name)===targetKey);
+}
+
+function syncIdentifiedPlayerUI(){
+ const idx=getIdentifiedPlayerIndex();
+ const p=idx>=0?players[idx]:null;
+ const labelText=isAuthenticated()?(p?p.name:(isAdmin()?currentUser+" (Admin)":currentUser)):"Non connecté";
+ if($("attackOriginLabel"))$("attackOriginLabel").textContent=labelText;
+ if($("importOriginLabel"))$("importOriginLabel").textContent=labelText;
+ if($("reqPlayerLabel"))$("reqPlayerLabel").textContent=labelText;
+ if($("cvOriginLabel"))$("cvOriginLabel").textContent=labelText;
+ if($("incomingAttacksTarget"))$("incomingAttacksTarget").textContent=labelText;
+ if(idx>=0){
+  selectedOrigin=idx;
+  if($("moveOrigin"))$("moveOrigin").value=String(idx);
+  if($("importOrigin"))$("importOrigin").value=String(idx);
+  if($("reqPlayer"))$("reqPlayer").value=String(idx);
+  if($("cvOrigin"))$("cvOrigin").value=String(idx);
+ }
+ if($("reqClear"))$("reqClear").style.display=isAdmin()?"":"none";
+ if($("backupPanel"))$("backupPanel").style.display=isAuthenticated()?"block":"none";
+ if($("addPlayerPanel"))$("addPlayerPanel").style.display=isAdmin()?"block":"none";
+}
+
+if(players.length){
+ selectedDestination=Math.max(0,players.findIndex(p=>p.name==="Blue59"));
+}
+
+document.querySelectorAll(".tool-toggle").forEach(button=>{
+ button.addEventListener("click",()=>{
+  const content=$(button.dataset.toggle);
+  const isOpen=content.style.display!=="none";
+  content.style.display=isOpen?"none":"block";
+  button.textContent=isOpen?"＋":"−";
+  button.setAttribute("aria-expanded",String(!isOpen));
+ });
+});
+
+function saveData(){
+ $("saveStatus").textContent=safeSet("fourmizzz_players_v4",JSON.stringify(players))
+  ?"✓ Modifications sauvegardées.":"Impossible de sauvegarder.";
+}
+function saveMovements(){
+ if(!safeSet("fourmizzz_movements_v5",JSON.stringify(movements)))notify("Impossible de sauvegarder les déplacements.","err");
+}
+
+$("exportData").onclick=()=>{
+ if(!requireAuth("exporter une sauvegarde"))return;
+ const blob=new Blob([JSON.stringify({version:11,players,movements,convoyRequests,convoyLog},null,1)],{type:"application/json"});
+ const a=document.createElement("a");
+ a.href=URL.createObjectURL(blob);
+ a.download="fourmizzz-sauvegarde-"+new Date().toISOString().slice(0,10)+".json";
+ a.click();setTimeout(()=>URL.revokeObjectURL(a.href),2000);
+ notify("💾 Sauvegarde JSON exportée.");
+};
+$("importData").onclick=()=>{
+ if(!requireAuth("restaurer une sauvegarde"))return;
+ $("importFile").click();
+};
+$("importFile").onchange=e=>{
+ const file=e.target.files[0];if(!file)return;
+ const reader=new FileReader();
+ reader.onload=()=>{
+  try{
+   const data=JSON.parse(reader.result);
+   if(!Array.isArray(data.players)||!Array.isArray(data.movements))throw new Error();
+   openConfirm("Remplacer les données actuelles par cette sauvegarde ?",()=>{
+    players=data.players.map(normalizeLocalPlayer);movements=data.movements;
+    convoyRequests=Array.isArray(data.convoyRequests)?data.convoyRequests:[];convoyRequests.forEach(r=>{if(!Array.isArray(r.deliveries))r.deliveries=[];});saveRequests();
+    convoyLog=Array.isArray(data.convoyLog)?data.convoyLog:[];saveLog();
+    saveData();saveMovements();selectedOrigin=getIdentifiedPlayerIndex();selectedDestination=0;update(true);
+    notify("⬆️ Sauvegarde restaurée.");
+   });
+  }catch(err){notify("Fichier de sauvegarde invalide.","err");}
+  e.target.value="";
+ };
+ reader.readAsText(file);
+};
+
+// Relai Worker utilisé pour l'API Fourmizzz S5
+const FOURMIZZZ_API=FOURMIZZZ_PROXY+"/api/exports/";
+const FOURMIZZZ_PLAYERS_API=FOURMIZZZ_PROXY+"/api/exports/players/";
+const SYNC_VERSION_KEY="fourmizzz_s5_export_version";
+const SYNC_DATA_KEY="fourmizzz_s5_export_data";
+const SYNC_CHECK_KEY="fourmizzz_s5_last_check";
+const SYNC_SUCCESS_KEY="fourmizzz_s5_last_sync";
+const SYNC_INTERVAL=60*60*1000;
+let syncInProgress=false;
+
+function setSyncStatus(message,type="normal"){
+ const box=$("syncStatus");
+ box.textContent=message;
+ box.className=type==="good"?"sync-good":type==="warn"?"sync-warn":type==="error"?"sync-error":"muted";
+}
+function getCachedExport(){
+ try{
+  const parsed=JSON.parse(localStorage.getItem(SYNC_DATA_KEY)||"null");
+  return Array.isArray(parsed)?parsed:null;
+ }catch(e){return null;}
+}
+function getStoredTime(key){
+ const value=Number(localStorage.getItem(key)||0);
+ return Number.isFinite(value)?value:0;
+}
+function formatDateTime(ts){return ts?new Date(ts).toLocaleString("fr-FR"):"jamais";}
+function getExportPlayers(data){
+ if(Array.isArray(data))return data;
+ if(data&&Array.isArray(data.players))return data.players;
+ if(data&&Array.isArray(data.data))return data.data;
+ return null;
+}
+
+async function fetchJsonWithFallback(url){
+ const ctrl=new AbortController(),timer=setTimeout(()=>ctrl.abort(),10000);
+ try{
+  const response=await fetch(url,{method:"GET",cache:"no-store",headers:{"Accept":"application/json"},signal:ctrl.signal});
+  if(!response.ok)throw new Error("HTTP "+response.status);
+  return {data:await response.json(),method:"Relai API Fourmizzz"};
+ }catch(error){
+  throw new Error("Relai API inaccessible : "+error.message);
+ }finally{clearTimeout(timer);}
+}
+
+function normalizeApiPlayer(p){
+ if(!p||p.id===undefined||p.id===null)return null;
+ const xVal=p.x!==undefined&&p.x!==null&&Number.isFinite(Number(p.x))?Number(p.x):null;
+ const yVal=p.y!==undefined&&p.y!==null&&Number.isFinite(Number(p.y))?Number(p.y):null;
+ return {
+  id:String(p.id),pseudo:String(p.pseudo||""),x:xVal,y:yVal,field:p.field??null,
+  buildingScore:p.buildingScore??null,technologyScore:p.technologyScore??null,
+  alliance:p.alliance??null,grade:p.grade??null,
+  onHoliday:p.onHoliday??p.holiday??null,isBanned:p.isBanned??p.banned??null
+ };
+}
+
+function copyApiFields(local,api){
+ if(api.x!==null&&api.x!==undefined)local.x=api.x;
+ if(api.y!==null&&api.y!==undefined)local.y=api.y;
+ local.tdc=api.field;local.buildingScore=api.buildingScore;local.technologyScore=api.technologyScore;
+ local.alliance=api.alliance;local.grade=api.grade;local.onHoliday=api.onHoliday;local.isBanned=api.isBanned;
+}
+
+function applyFourmizzzData(apiPlayers){
+ if(!Array.isArray(apiPlayers))return 0;
+ const normalized=apiPlayers.map(normalizeApiPlayer).filter(Boolean);
+ const byId=new Map(normalized.map(a=>[a.id,a]));
+ const byName=new Map();
+ normalized.forEach(a=>{const k=normalizeNameKey(a.pseudo);if(k&&!byName.has(k))byName.set(k,a);});
+ const usedIds=new Set();
+ let matched=0;
+ const hasId=l=>l.fourmizzzId!==null&&l.fourmizzzId!==undefined&&l.fourmizzzId!=="";
+
+ players.forEach(local=>{
+  if(!hasId(local))return;
+  const found=byId.get(String(local.fourmizzzId));
+  if(!found||usedIds.has(found.id))return;
+  copyApiFields(local,found);usedIds.add(found.id);matched++;
+ });
+ players.forEach(local=>{
+  if(hasId(local))return;
+  const found=byName.get(normalizeNameKey(local.name));
+  if(!found||usedIds.has(found.id))return;
+  local.fourmizzzId=found.id;copyApiFields(local,found);usedIds.add(found.id);matched++;
+ });
+ const allianceCount=new Map();
+ players.forEach(p=>{const a=String(p.alliance||"").trim();if(a)allianceCount.set(a,(allianceCount.get(a)||0)+1);});
+ let mainAlliance="",mainCount=0;
+ allianceCount.forEach((c,a)=>{if(c>mainCount){mainCount=c;mainAlliance=a;}});
+ const knownAlliances=new Set(mainAlliance?[mainAlliance]:[]);
+ const existingNames=new Set(players.map(p=>normalizeNameKey(p.name)));
+ let addedCount=0;
+ normalized.forEach(api=>{
+  if(usedIds.has(api.id))return;
+  const k=normalizeNameKey(api.pseudo);
+  if(!k||existingNames.has(k))return;
+  const sameAlliance=api.alliance&&knownAlliances.has(String(api.alliance).trim());
+  if(sameAlliance&&api.x!==null&&api.y!==null){
+   const added=normalizeLocalPlayer({
+    name:api.pseudo.trim(),
+    x:api.x??0,
+    y:api.y??0,
+    va:0,
+    fourmizzzId:api.id
+   });
+   copyApiFields(added,api);
+   players.push(added);
+   existingNames.add(k);
+   usedIds.add(api.id);
+   matched++;
+   addedCount++;
+  }
+ });
+ saveData();
+ update(true);
+ if(addedCount>0)notify(`➕ ${addedCount} nouveau(x) joueur(s) d'alliance ajouté(s) depuis Fourmizzz.`);
+ return matched;
+}
+
+async function syncFourmizzz(manual=false){
+ if(syncInProgress)return;
+ syncInProgress=true;
+ const button=$("syncNow");
+ button.disabled=true;button.textContent="⏳ Synchronisation...";
+ const cached=getCachedExport();
+ const useCache=()=>cached?applyFourmizzzData(cached):0;
+ try{
+  const lastCheck=getStoredTime(SYNC_CHECK_KEY),now=Date.now();
+
+  if(!manual&&lastCheck&&now-lastCheck<SYNC_INTERVAL){
+   const matched=useCache();
+   const next=new Date(lastCheck+SYNC_INTERVAL).toLocaleTimeString("fr-FR",{hour:"2-digit",minute:"2-digit"});
+   if(cached)setSyncStatus("✓ Données en cache appliquées : "+matched+" joueur(s). Prochaine vérification après "+next+".","good");
+   else setSyncStatus("Vérification récente. Aucune donnée en cache disponible.","warn");
+   return;
+  }
+
+  setSyncStatus("Connexion au relai API Fourmizzz...");
+  let versionsResult;
+  try{versionsResult=await fetchJsonWithFallback(FOURMIZZZ_API);}
+  catch(error){
+   const matched=useCache();
+   if(cached)setSyncStatus("Relai API inaccessible. Anciennes données conservées : "+matched+" joueur(s). Dernière synchronisation : "+formatDateTime(getStoredTime(SYNC_SUCCESS_KEY)),"warn");
+   else setSyncStatus("Relai API Fourmizzz inaccessible. Aucune donnée locale perdue.","error");
+   return;
+  }
+
+  const versions=versionsResult.data;
+  const latestVersion=Array.isArray(versions?.players)?String(versions.players[0]||""):"";
+  if(!latestVersion){
+   setSyncStatus("La liste des exports Fourmizzz n'a pas renvoyé de version exploitable. Cache conservé ("+useCache()+" joueur(s)).","warn");
+   return;
+  }
+
+  if(localStorage.getItem(SYNC_VERSION_KEY)===latestVersion&&cached){
+   safeSet(SYNC_CHECK_KEY,String(now));
+   setSyncStatus("✓ Données déjà à jour : "+useCache()+" joueur(s). Export "+latestVersion+". · "+versionsResult.method+".","good");
+   return;
+  }
+
+  setSyncStatus("Nouvel export détecté ("+latestVersion+"). Téléchargement...");
+  let exportResult;
+  try{exportResult=await fetchJsonWithFallback(FOURMIZZZ_PLAYERS_API+"?version="+encodeURIComponent(latestVersion));}
+  catch(error){
+   setSyncStatus("Impossible de télécharger le nouvel export. Anciennes données conservées ("+useCache()+" joueur(s)).","warn");
+   return;
+  }
+
+  const apiPlayers=getExportPlayers(exportResult.data);
+  if(!apiPlayers){
+   setSyncStatus("Format de l'export inattendu. Cache conservé ("+useCache()+" joueur(s)).","warn");
+   return;
+  }
+
+  const compact=apiPlayers.map(normalizeApiPlayer).filter(Boolean);
+  if(safeSet(SYNC_DATA_KEY,JSON.stringify(compact))){
+   safeSet(SYNC_VERSION_KEY,latestVersion);
+  }
+  safeSet(SYNC_CHECK_KEY,String(now));
+  safeSet(SYNC_SUCCESS_KEY,String(now));
+
+  const matched=applyFourmizzzData(compact);
+  setSyncStatus("✓ Synchronisation réussie : "+matched+" joueur(s) associés sur "+players.length+". Export "+latestVersion+" · "+exportResult.method+".","good");
+
+ }catch(error){
+  console.error("Synchronisation Fourmizzz :",error);
+  setSyncStatus("Erreur de synchronisation. Données précédentes conservées ("+useCache()+" joueur(s)).","error");
+ }finally{
+  syncInProgress=false;
+  button.disabled=false;button.textContent="🔄 Actualiser";
+ }
+}
+$("syncNow").addEventListener("click",()=>{syncFourmizzz(true);pullShared(true);});
+// ======================================================
+// PARTIE 2 : STATS 30J, CARTE, DÉPLACEMENTS, CONVOIS & RENDU
+// ======================================================
+
+function distance(a,b){return Math.hypot(a.x-b.x,a.y-b.y);}
+function travelTime(d,va){return Math.round((1-Math.exp(-d/350))*7.375*86400*Math.pow(0.9,va));}
+function formatTime(seconds){
+ const days=Math.floor(seconds/86400);seconds%=86400;
+ const hours=Math.floor(seconds/3600);seconds%=3600;
+ const minutes=Math.floor(seconds/60),secs=seconds%60;
+ return(days?days+"j ":"")+hours+"h "+minutes+"m "+secs+"s";
+}
+function formatQuantity(value){return Number(value||0).toLocaleString("fr-FR");}
+function getProgress(m){
+ const duration=m.arrivalAt-m.startAt;
+ if(Date.now()>=m.arrivalAt||duration<=0)return 1;
+ return Math.max(0,Math.min(1,(Date.now()-m.startAt)/duration));
+}
+
+function readExternalJsonArray(key){
+ try{
+  const parsed=JSON.parse(localStorage.getItem(key)||"[]");
+  return Array.isArray(parsed)?parsed:[];
+ }catch(e){return [];}
+}
+
+function makeAttackDedupKey(actor,target,arrivalAt,arrivalLabel,ants,explicitSig){
+ if(explicitSig)return "sig:"+String(explicitSig);
+ const dayBucket=arrivalAt?Math.round(Number(arrivalAt)/60000):String(arrivalLabel||"");
+ return "atk:"+normalizeNameKey(actor)+"|"+normalizeNameKey(target)+"|"+dayBucket+"|"+(Number(ants)||0);
+}
+
+function getAllAttacksForStats30(){
+ const now=Date.now();
+ const cutoff=now-DAY30;
+ const seen=new Set();
+ const items=[];
+
+ for(const m of movements){
+  if(!m||m.type!=="attack")continue;
+  const ts=Number(m.startAt||m.detectedAt||m.arrivalAt||0);
+  if(!ts||ts<cutoff)continue;
+  const actor=m.from?.name||m.createdBy||"Inconnu";
+  const key=makeAttackDedupKey(actor,m.to?.name,m.arrivalAt,m.arrivalLabel,m.ants,m.sig);
+  if(seen.has(key))continue;
+  seen.add(key);
+  items.push({actor});
+ }
+
+ const scriptAttacks=readExternalJsonArray("fmz_local_attacks_v1");
+ for(const a of scriptAttacks){
+  if(!a)continue;
+  const ts=Number(a.detectedAt||a.startAt||a.arrivalAt||0);
+  if(!ts||ts<cutoff)continue;
+  const actor=a.attacker||a.from?.name||"Inconnu";
+  const key=makeAttackDedupKey(actor,a.target,a.arrivalAt,a.arrivalLabel,a.ants,a.sig);
+  if(seen.has(key))continue;
+  seen.add(key);
+  items.push({actor});
+ }
+
+ return items;
+}
+
+function makeHuntDedupKey(actor,area,arrivalAt,arrivalLabel,explicitSig){
+ if(explicitSig)return "sig:"+String(explicitSig);
+ const dayBucket=arrivalAt?Math.round(Number(arrivalAt)/60000):String(arrivalLabel||"");
+ return "hunt:"+normalizeNameKey(actor)+"|"+(Number(area)||0)+"|"+dayBucket;
+}
+
+function getAllHuntsForStats30(){
+ const now=Date.now();
+ const cutoff=now-DAY30;
+ const seen=new Set();
+ const items=[];
+
+ for(const m of movements){
+  if(!m||m.type!=="hunt")continue;
+  const ts=Number(m.startAt||m.detectedAt||m.arrivalAt||0);
+  if(!ts||ts<cutoff)continue;
+  const actor=m.from?.name||m.player||m.createdBy||"Inconnu";
+  const area=Number(m.area)||0;
+  const key=makeHuntDedupKey(actor,area,m.arrivalAt,m.arrivalLabel,m.sig);
+  if(seen.has(key))continue;
+  seen.add(key);
+  items.push({actor,area});
+ }
+
+ const scriptHunts=readExternalJsonArray("fmz_local_hunts_v1");
+ for(const h of scriptHunts){
+  if(!h)continue;
+  const ts=Number(h.detectedAt||h.startAt||h.arrivalAt||0);
+  if(!ts||ts<cutoff)continue;
+  const actor=h.player||h.from?.name||"Inconnu";
+  const area=Number(h.area)||0;
+  const key=makeHuntDedupKey(actor,area,h.arrivalAt,h.arrivalLabel,h.sig);
+  if(seen.has(key))continue;
+  seen.add(key);
+  items.push({actor,area});
+ }
+
+ return items;
+}
+
+function resolveDisplayPlayerName(rawName){
+ const norm=normalizeNameKey(rawName);
+ const match=players.find(p=>normalizeNameKey(p.name)===norm);
+ return match?match.name:(String(rawName||"").trim()||"Inconnu");
+}
+
+function renderAttacksAndTerrainStats30(){
+ const atkBox=$("attacksStatsList");
+ if(atkBox){
+  const attacks=getAllAttacksForStats30();
+  const counts=new Map();
+  for(const item of attacks){
+   const label=resolveDisplayPlayerName(item.actor);
+   const key=normalizeNameKey(label);
+   const prev=counts.get(key)||{name:label,count:0};
+   prev.count+=1;
+   counts.set(key,prev);
+  }
+  const rows=Array.from(counts.values()).filter(x=>x.count>0).sort((a,b)=>b.count-a.count);
+  const totalAttacks=rows.reduce((s,x)=>s+x.count,0);
+  atkBox.innerHTML=rows.length
+   ?`<div class="stats-line">Total sur 30 jours : <b>${formatQuantity(totalAttacks)}</b> attaque(s) lancée(s)</div>`
+    +rows.map((x,i)=>`<div class="next-item"><span>${["🥇","🥈","🥉"][i]||(i+1)+"."} <b>${esc(x.name)}</b></span><b>⚔️ ${formatQuantity(x.count)}</b></div>`).join("")
+   :'<div class="muted">Aucune attaque lancée enregistrée sur les 30 derniers jours.</div>';
+ }
+
+ const terBox=$("terrainStatsList");
+ if(terBox){
+  const hunts=getAllHuntsForStats30();
+  const totals=new Map();
+  for(const item of hunts){
+   const label=resolveDisplayPlayerName(item.actor);
+   const key=normalizeNameKey(label);
+   const prev=totals.get(key)||{name:label,area:0,huntsCount:0};
+   prev.area+=Number(item.area)||0;
+   prev.huntsCount+=1;
+   totals.set(key,prev);
+  }
+  const rows=Array.from(totals.values()).filter(x=>x.area>0||x.huntsCount>0).sort((a,b)=>b.area-a.area||b.huntsCount-a.huntsCount);
+  const totalArea=rows.reduce((s,x)=>s+x.area,0);
+  terBox.innerHTML=rows.length
+   ?`<div class="stats-line">Terrain récupéré sur 30 jours : <b>${formatQuantity(totalArea)} cm²</b> (${rows.reduce((s,x)=>s+x.huntsCount,0)} chasse(s))</div>`
+    +rows.map((x,i)=>`<div class="next-item"><span>${["🥇","🥈","🥉"][i]||(i+1)+"."} <b>${esc(x.name)}</b> <span class="muted">(${x.huntsCount} chasse(s))</span></span><b>🏞️ ${formatQuantity(x.area)} cm²</b></div>`).join("")
+   :'<div class="muted">Aucun terrain récupéré enregistré sur les 30 derniers jours.</div>';
+ }
+}
+
+let confirmCallback=null;
+function openConfirm(message,callback){
+ $("confirmMessage").textContent=message;
+ $("confirmModal").style.display="flex";
+ confirmCallback=callback;
+}
+$("confirmNo").onclick=()=>{$("confirmModal").style.display="none";confirmCallback=null;};
+$("confirmYes").onclick=()=>{
+ $("confirmModal").style.display="none";
+ if(confirmCallback){const cb=confirmCallback;confirmCallback=null;cb();}
+};
+
+const NS="http://www.w3.org/2000/svg";
+const svg=$("map"),scene=$("scene");
+let XMIN=-5,XMAX=145,YMIN=32,YMAX=88;
+let zoom=1,panX=0,panY=0,drag=null,worldNode=null,layerNode=null,rafId=0,animIcons=[],showRange=false,boundsKey="";
+function sx(x){return 35+(x-XMIN)/(XMAX-XMIN)*830;}
+function sy(y){return 25+(YMAX-y)/(YMAX-YMIN)*510;}
+function el(tag,attrs,parent=scene){
+ const node=document.createElementNS(NS,tag);
+ for(const k in attrs)node.setAttribute(k,attrs[k]);
+ parent.appendChild(node);return node;
+}
+
+const defs=document.createElementNS(NS,"defs");
+svg.insertBefore(defs,scene);
+
+const grad=el("linearGradient",{id:"terrainGradient",x1:"0%",y1:"0%",x2:"100%",y2:"100%"},defs);
+[["0%","#91b86b"],["30%","#82a95e"],["65%","#719b53"],["100%","#9ab96d"]]
+ .forEach(([offset,color])=>el("stop",{offset,"stop-color":color},grad));
+
+const grass=el("pattern",{id:"grassPattern",width:30,height:30,patternUnits:"userSpaceOnUse"},defs);
+["M 4 10 q -2 -4 -3 -5 M 4 10 q 0 -5 2 -7 M 4 10 q 3 -4 5 -4",
+ "M 19 25 q -2 -4 -3 -5 M 19 25 q 0 -5 2 -7 M 19 25 q 3 -4 5 -4",
+ "M 25 8 q -2 -3 -3 -4 M 25 8 q 1 -4 2 -5"].forEach((d,i)=>
+ el("path",{d,fill:"none",stroke:i===1?"#355f32":"#d9edb4","stroke-width":.8,opacity:.28,"stroke-linecap":"round"},grass));
+[[12,5,1.1],[23,16,.8],[7,23,.7],[15,15,.6],[28,28,.7]].forEach(([cx,cy,r])=>
+ el("circle",{cx,cy,r,fill:"#e1efc2",opacity:.22},grass));
+
+const clip=el("clipPath",{id:"mapClip"},defs);
+el("rect",{x:25,y:20,width:855,height:520},clip);
+
+const vg=el("radialGradient",{id:"vignette",cx:"50%",cy:"50%",r:"75%"},defs);
+el("stop",{offset:"55%","stop-color":"#000","stop-opacity":0},vg);
+el("stop",{offset:"100%","stop-color":"#000","stop-opacity":.4},vg);
+const shadowFilter=el("filter",{id:"dropShadow",x:"-40%",y:"-40%",width:"180%",height:"180%"},defs);
+el("feDropShadow",{dx:0,dy:1.5,stdDeviation:1.6,"flood-color":"#000","flood-opacity":.55},shadowFilter);
+
+const MAP_W=830,MAP_H=510;
+function computeBounds(){
+ if(!players.length)return;
+ let x0=Infinity,x1=-Infinity,y0=Infinity,y1=-Infinity;
+ players.forEach(p=>{x0=Math.min(x0,p.x);x1=Math.max(x1,p.x);y0=Math.min(y0,p.y);y1=Math.max(y1,p.y);});
+ x0-=8;x1+=14;y0-=8;y1+=8;
+ const ratio=MAP_W/MAP_H,w=x1-x0,h=y1-y0;
+ if(w/h>ratio){const e=(w/ratio-h)/2;y0-=e;y1+=e;}
+ else{const e=(h*ratio-w)/2;x0-=e;x1+=e;}
+ XMIN=x0;XMAX=x1;YMIN=y0;YMAX=y1;
+}
+function refreshBounds(){
+ computeBounds();
+ const key=[XMIN,XMAX,YMIN,YMAX].map(v=>v.toFixed(2)).join();
+ if(key===boundsKey)return;
+ boundsKey=key;
+ if(worldNode)worldNode.remove();
+ buildStaticMap();applyTransform();
+}
+
+function clampPan(){
+ const left=25,right=880,top=20,bottom=540;
+ const tl=450+(left-450)*zoom,tr=450+(right-450)*zoom;
+ const tt=280+(top-280)*zoom,tb=280+(bottom-280)*zoom;
+ if(tr-tl>=right-left)panX=Math.max(right-tr,Math.min(left-tl,panX));
+ else panX=(left+right)/2-(tl+tr)/2;
+ if(tb-tt>=bottom-top)panY=Math.max(bottom-tb,Math.min(top-tt,panY));
+ else panY=(top+bottom)/2-(tt+tb)/2;
+}
+function applyTransform(){
+ if(rafId||!worldNode)return;
+ rafId=requestAnimationFrame(()=>{
+  rafId=0;
+  worldNode.setAttribute("transform",`translate(${panX} ${panY}) translate(450 280) scale(${zoom}) translate(-450 -280)`);
+ });
+}
+
+function buildStaticMap(){
+ const world=worldNode=el("g",{});
+ el("rect",{x:25,y:20,width:855,height:520,fill:"url(#terrainGradient)"},world);
+ el("rect",{x:25,y:20,width:855,height:520,fill:"url(#grassPattern)"},world);
+ el("rect",{x:25,y:20,width:855,height:520,fill:"url(#vignette)",style:"pointer-events:none"},world);
+
+ [["M 45 65 Q 120 35 190 75 T 310 65 Q 350 105 280 135 T 100 125 Q 45 115 45 65","#d2e6a2",".10"],
+  ["M 430 45 Q 530 25 620 70 T 770 65 Q 830 100 760 130 T 550 115 Q 450 100 430 45","#d5e9aa",".11"],
+  ["M 90 260 Q 180 215 270 260 T 390 270 Q 420 320 330 335 T 130 325 Q 70 305 90 260","#355f38",".09"],
+  ["M 520 220 Q 610 180 700 220 T 850 235 Q 870 285 780 295 T 580 280 Q 500 260 520 220","#d7e8a9",".10"],
+  ["M 60 420 Q 140 380 230 420 T 370 435 Q 390 485 300 505 T 100 490 Q 45 465 60 420","#d5e8a7",".12"],
+  ["M 470 400 Q 560 355 660 395 T 830 410 Q 860 460 770 490 T 550 475 Q 460 450 470 400","#355f38",".09"]
+ ].forEach(([d,fill,opacity])=>el("path",{d,fill,opacity},world));
+
+ [[80,155],[145,190],[225,65],[345,110],[410,220],[570,150],[680,175],[790,165],[835,330],[740,350],
+  [610,315],[470,330],[360,420],[250,370],[150,455],[430,490],[540,455],[690,455],[815,80],[310,205],
+  [95,350],[200,235],[385,300],[755,250],[585,80]].forEach(([x,y],i)=>{
+  const s=i%3===0?1.5:1;
+  const d=`M ${x} ${y} q ${-3*s} ${-5*s} ${-5*s} ${-7*s} M ${x} ${y} q 0 ${-7*s} ${2*s} ${-10*s} M ${x} ${y} q ${4*s} ${-5*s} ${7*s} ${-6*s}`;
+  el("path",{d,fill:"none",stroke:i%2===0?"#e0efbb":"#416d38","stroke-width":1.1,opacity:".34","stroke-linecap":"round"},world);
+ });
+
+ ["M 50 100 Q 160 35 270 100 T 490 95","M 35 300 Q 150 230 260 290 T 480 275","M 500 80 Q 630 20 760 85 T 875 75",
+  "M 520 380 Q 650 310 780 370 T 870 355","M 80 500 Q 180 435 300 490 T 470 475","M 330 170 Q 430 115 530 165 T 690 155",
+  "M 120 390 Q 220 340 320 390 T 460 380"].forEach((d,i)=>
+  el("path",{d,fill:"none",stroke:i%2===0?"#e3efc1":"#355f37","stroke-width":i%2===0?8:5,opacity:".12"},world));
+
+ const gs=(XMAX-XMIN)>90?10:5;
+ for(let x=Math.ceil(XMIN/gs)*gs;x<=XMAX;x+=gs){
+  if(sx(x)<25||sx(x)>880)continue;
+  el("line",{x1:sx(x),y1:20,x2:sx(x),y2:540,class:"gridline"},world);
+  el("text",{x:sx(x),y:552,class:"axis","text-anchor":"middle"},world).textContent=x;
+ }
+ for(let y=Math.ceil(YMIN/gs)*gs;y<=YMAX;y+=gs){
+  if(sy(y)<20||sy(y)>540)continue;
+  el("line",{x1:25,y1:sy(y),x2:880,y2:sy(y),class:"gridline"},world);
+  el("text",{x:18,y:sy(y)+2,class:"axis","text-anchor":"middle"},world).textContent=y;
+ }
+ layerNode=el("g",{"clip-path":"url(#mapClip)"},world);
+ el("rect",{x:25,y:20,width:855,height:520,class:"map-border"},world);
+}
+buildStaticMap();
+
+function openPlayerHunts(playerName){
+ showTab("map");
+ activeMovementTab="hunt";
+ document.querySelectorAll(".movement-tab").forEach(b=>b.classList.toggle("active",b.dataset.type==="hunt"));
+ const section=$("activeSection");
+ if(section.style.display==="none"){
+  section.style.display="block";
+  const toggle=document.querySelector('[data-toggle="activeSection"]');
+  if(toggle){toggle.textContent="−";toggle.setAttribute("aria-expanded","true");}
+ }
+ movements.filter(m=>m.type==="hunt"&&m.from?.name===playerName&&Date.now()<m.arrivalAt)
+  .forEach(m=>expandedMovements.add(String(m.id)));
+ renderMovements();
+ section.scrollIntoView({behavior:"smooth",block:"start"});
+}
+
+function renderMap(){
+ const g=layerNode;
+ g.replaceChildren();animIcons=[];
+ drawRange(g);
+ const now=Date.now();
+
+ const huntCounts={};
+ movements.forEach(m=>{
+  if(now>=m.arrivalAt)return;
+  if(m.type==="hunt"){
+   if(m.from?.name)huntCounts[m.from.name]=(huntCounts[m.from.name]||0)+1;
+   return;
+  }
+  if(!m.from||!m.to)return;
+  const isAttack=m.type==="attack";
+  const color=isAttack?"#ef4444":"#3b82f6";
+  const x1=sx(m.from.x),y1=sy(m.from.y),x2=sx(m.to.x),y2=sy(m.to.y);
+  el("line",{x1,y1,x2,y2,class:"ant-path",stroke:color},g);
+  el("circle",{cx:x2,cy:y2,r:7,class:"pulse",stroke:color},g);
+  const dx=x2-x1,dy=y2-y1;
+  const count=isAttack?ICONS_PER_ATTACK:ICONS_PER_CONVOY;
+  for(let k=0;k<count;k++){
+   const icon=el("text",{x:x1,y:y1,class:"ant-label",fill:"white"},g);
+   icon.textContent=isAttack?"🐎":"📦";
+   const a={icon,x1,y1,dx,dy,start:m.startAt,dur:m.arrivalAt-m.startAt,off:k/count};
+   animIcons.push(a);placeIcon(a,now);
+  }
+ });
+
+ players.forEach((p,i)=>{
+  const group=el("g",{class:"player",transform:`translate(${sx(p.x)} ${sy(p.y)})`},g);
+  const rankText=String(p.rank||"").trim().toUpperCase();
+  let playerColor="#9ca3af";
+  if(/^G(?:[1-9]|10)$/.test(rankText))playerColor="#22c55e";
+  else if(rankText==="C")playerColor="#ef4444";
+  else if(/^P(?:[1-9]|1[0-9]|20)$/.test(rankText))playerColor="#facc15";
+  if(i===selectedOrigin)el("circle",{r:15,style:"fill:none;stroke:#4ade80;stroke-width:2;stroke-dasharray:4 3"},group);
+  if(isCoordsZero(p))el("circle",{r:12.5,style:"fill:none;stroke:#f59e0b;stroke-width:1.8;stroke-dasharray:2 2"},group);
+
+  el("circle",{r:9,fill:playerColor,filter:"url(#dropShadow)"},group);
+  el("text",{x:0,y:1,class:"nest-icon"},group).textContent="⛰️";
+  if(p.onHoliday===true||p.onHoliday===1||p.onHoliday==="1")el("text",{x:-15,y:-6,style:"font-size:10px;font-weight:normal"},group).textContent="🏖️";
+  if(p.isBanned===true||p.isBanned===1||p.isBanned==="1")el("text",{x:-15,y:8,style:"font-size:10px;font-weight:normal"},group).textContent="🚫";
+  el("rect",{x:11,y:-17,width:Math.max(16,p.name.length*5.4+8),height:12,rx:5,class:"name-pill"},group);
+  el("text",{x:14,y:-8},group).textContent=p.name;
+  if(p.rank&&p.rank.trim()!=="")el("text",{x:12,y:2,class:"rank-label"},group).textContent=p.rank;
+  const huntCount=huntCounts[p.name]||0;
+  if(huntCount>0){
+   const huntLabel=el("text",{x:12,y:13,class:"hunt-map-label"},group);
+   huntLabel.textContent="⚔️ "+huntCount;
+   huntLabel.addEventListener("pointerdown",e=>e.stopPropagation());
+   huntLabel.addEventListener("click",e=>{e.stopPropagation();openPlayerHunts(p.name);});
+  }
+  group.addEventListener("pointerdown",e=>e.stopPropagation());
+  group.addEventListener("click",e=>{e.stopPropagation();selectedOrigin=i;update();});
+ });
+ syncIconAnimation();
+}
+
+function fillSelect(select,selected){
+ select.innerHTML="";
+ players.forEach((p,i)=>{
+  const option=document.createElement("option");
+  option.value=i;option.textContent=p.name;select.appendChild(option);
+ });
+ if(players.length)select.value=Math.min(Math.max(selected,0),players.length-1);
+}
+function renderSelectors(){
+ if(players.length){
+  const clampedOrigin=selectedOrigin>=0?Math.min(selectedOrigin,players.length-1):0;
+  selectedDestination=Math.min(Math.max(selectedDestination,0),players.length-1);
+  fillSelect($("origin"),clampedOrigin);
+ }else{
+  selectedOrigin=-1;selectedDestination=-1;
+  fillSelect($("origin"),0);
+ }
+ fillSelect($("destination"),selectedDestination);
+ fillSelect($("moveOrigin"),Number($("moveOrigin").value)||0);
+ fillSelect($("moveDestination"),Number($("moveDestination").value)||0);
+ fillSelect($("cvOrigin"),Number($("cvOrigin").value)||0);
+ fillSelect($("cvDestination"),Number($("cvDestination").value)||0);
+ const previous=$("importOrigin").value,defaultIndex=getIdentifiedPlayerIndex();
+ fillSelect($("importOrigin"),previous!==""?Number(previous):Math.max(0,defaultIndex));
+}
+
+function updateResult(){
+ const box=$("result"),a=players[selectedOrigin>=0?selectedOrigin:0],b=players[selectedDestination];
+ if(!a||!b){box.textContent="Ajoute un joueur pour commencer.";return;}
+ const d=distance(a,b),seconds=travelTime(d,a.va);
+ const zeroWarn=(isCoordsZero(a)||isCoordsZero(b))?'<div class="sync-warn" style="margin-top:6px">⚠️ Au moins un joueur est en (0, 0) : vérifie ses coordonnées.</div>':"";
+ box.innerHTML=`<b>${esc(a.name)}</b> → <b>${esc(b.name)}</b><br>
+ Distance réelle : ${d.toFixed(3)}<br>Distance affichée : <b>${Math.ceil(d)}</b><br>
+ Vitesse d'attaque du départ : <b>${a.va}</b><br><br>Temps de trajet estimé :
+ <div class="big">${formatTime(seconds)}</div>
+ <div class="muted">Départ : ${a.x}/${a.y}<br>Arrivée : ${b.x}/${b.y}</div>${zeroWarn}${nearbyHTML(a)}`;
+}
+
+function updateMoveEstimate(){
+ for(const [o,d,box] of [["moveOrigin","moveDestination","moveEstimate"],["cvOrigin","cvDestination","cvEstimate"]]){
+  const a=players[Number($(o).value)],b=players[Number($(d).value)],el=$(box);
+  if(!a||!b){el.textContent="--";continue;}
+  const dist=distance(a,b);
+  el.innerHTML=`<b>${formatTime(travelTime(dist,a.va))}</b><br><span class="muted">Distance : ${Math.ceil(dist)} · Vitesse d'attaque ${a.va}</span>`;
+ }
+}
+async function pushMovement(type,a,b,ants,wood,apples,silent){
+ const d=distance(a,b),duration=travelTime(d,a.va);
+ if(duration<=0){notify("Durée de déplacement invalide.","err");return null;}
+ const now=Date.now();
+ const id=now+"_"+Math.floor(Math.random()*1000000);
+ const m={
+  id,type,
+  from:{name:a.name,x:a.x,y:a.y,va:a.va},to:{name:b.name,x:b.x,y:b.y},
+  distance:d,duration,startAt:now,arrivalAt:now+duration*1000,ants,wood,apples,
+  createdBy:currentUser||a.name
+ };
+ const relay=await apiRelayAction("/api/movements",{action:"create",movement:m});
+ if(relay.ok&&relay.data?.movement&&typeof relay.data.movement==="object"){
+  Object.assign(m,relay.data.movement);
+ }else if(!relay.skipped&&relay.status===401){
+  clearAuthSession(false);
+  requireAuth("enregistrer ce déplacement");
+  return null;
+ }else if(!relay.skipped&&!relay.ok){
+  notify("Non enregistré : "+(relay.error||"serveur injoignable")+". Réessaie.","err");
+  return null;
+ }
+ movements.push(m);
+ if(type==="convoy"){convoyLog.push({movementId:m.id,to:b.name,from:a.name,wood:wood||0,apples:apples||0,arrivalAt:m.arrivalAt});saveLog();}
+ saveMovements();update(true);
+ if(!silent)notify((type==="attack"?"🐎 Attaque":"📦 Convoi")+" enregistré : "+a.name+" → "+b.name+" ("+formatTime(duration)+")");
+ return m;
+}
+$("launchMove").onclick=async()=>{
+ if(!requireAuth("déclarer une attaque"))return;
+ const oi=getIdentifiedPlayerIndex(),di=Number($("moveDestination").value),a=players[oi],b=players[di];
+ if(!a){notify("Joueur identifié introuvable dans la liste.","err");return;}
+ if(!b){notify("Sélectionne une arrivée.","warn");return;}
+ if(oi===di){notify("Le départ et l'arrivée doivent être différents.","warn");return;}
+ const value=$("attackAnts").value.trim();
+ if(value===""||!Number.isSafeInteger(Number(value))||Number(value)<=0){notify("Indique un nombre de fourmis valide.","warn");return;}
+ await pushMovement("attack",a,b,Number(value),null,null);
+};
+$("launchConvoy").onclick=async()=>{
+ if(!requireAuth("déclarer un convoi"))return;
+ const oi=Number($("cvOrigin").value),di=Number($("cvDestination").value),a=players[oi],b=players[di];
+ if(!a||!b){notify("Sélectionne un départ et une arrivée.","warn");return;}
+ if(oi===di){notify("Le départ et l'arrivée doivent être différents.","warn");return;}
+ const w=$("convoyWood").value.trim(),ap=$("convoyApples").value.trim();
+ if(w===""&&ap===""){notify("Indique une quantité de bois ou de pommes.","warn");return;}
+ const wood=w===""?0:Number(w),apples=ap===""?0:Number(ap);
+ if(!Number.isSafeInteger(wood)||!Number.isSafeInteger(apples)||wood<0||apples<0){notify("Les quantités doivent être des entiers positifs ou nuls.","warn");return;}
+ if(wood===0&&apples===0){notify("Indique au moins une quantité supérieure à zéro.","warn");return;}
+ if(await pushMovement("convoy",a,b,null,wood,apples)){
+  renderRequests(true);
+  $("convoyWood").value="";$("convoyApples").value="";
+ }
+};
+
+$("zoomIn").onclick=()=>{zoom=Math.min(zoom*1.25,5);clampPan();applyTransform();};
+$("zoomOut").onclick=()=>{zoom=Math.max(zoom/1.25,.7);clampPan();applyTransform();};
+$("reset").onclick=()=>{zoom=1;panX=0;panY=0;clampPan();applyTransform();};
+svg.addEventListener("wheel",e=>{
+ e.preventDefault();
+ zoom=Math.max(.7,Math.min(5,zoom*(e.deltaY<0?1.1:1/1.1)));
+ clampPan();applyTransform();
+},{passive:false});
+svg.addEventListener("pointerdown",e=>{
+ drag={x:e.clientX,y:e.clientY,px:panX,py:panY};
+ svg.setPointerCapture(e.pointerId);
+});
+svg.addEventListener("pointermove",e=>{
+ if(!drag)return;
+ const rect=svg.getBoundingClientRect();
+ panX=drag.px+(e.clientX-drag.x)*900/rect.width;
+ panY=drag.py+(e.clientY-drag.y)*560/rect.height;
+ clampPan();applyTransform();
+});
+svg.addEventListener("pointerup",()=>drag=null);
+svg.addEventListener("pointercancel",()=>drag=null);
+
+let importResults=[];
+
+function stripImportedMarkup(text){
+ return text.replace(/\[([^\]]+)\]\((?:https?:\/\/[^)]+)\)/gi,"$1")
+  .replace(/\*\*/g,"").replace(/\*/g,"").replace(/`/g,"").replace(/\u00a0/g," ");
+}
+function parseRemainingTime(text){
+ const match=text.match(/\bdans\s+(.+?)(?=\s+-\s*(?:Retour|Annuler)\b|$)/i);
+ if(!match)return null;
+ const units={days:0,hours:0,minutes:0,seconds:0};
+ const regex=/(\d+)\s*(jours?|j|heures?|h|minutes?|mins?|m|secondes?|secs?|s)\b/gi;
+ let part,found=false;
+ while((part=regex.exec(match[1]))!==null){
+  const value=Number(part[1]),unit=part[2].toLowerCase();
+  if(unit==="j"||unit.startsWith("jour"))units.days=value;
+  else if(unit==="h"||unit.startsWith("heure"))units.hours=value;
+  else if(unit==="m"||unit==="min"||unit==="mins"||unit.startsWith("minute"))units.minutes=value;
+  else units.seconds=value;
+  found=true;
+ }
+ if(!found)return null;
+ return units.days*86400+units.hours*3600+units.minutes*60+units.seconds;
+}
+function parseFrenchNumber(value){return Number(String(value).replace(/[ \u00a0.,]/g,""));}
+function parseHuntTroops(line){
+ const after=line.split(/troupes\s+en\s+chasses?\s*:/i)[1]||"";
+ return after.split(",").map(item=>{
+  const match=item.trim().match(/^([\d \u00a0.,]+)\s+(.+?)\.?$/);
+  if(!match)return null;
+  const quantity=parseFrenchNumber(match[1]),name=match[2].trim().replace(/\.$/,"");
+  if(!Number.isSafeInteger(quantity)||quantity<0||!name)return null;
+  return {quantity,name};
+ }).filter(Boolean);
+}
+
+function parseImportText(raw){
+ const lines=stripImportedMarkup(raw).split(/\r?\n/);
+ const blocks=[];let current=null;
+ for(const line of lines){
+  const trimmed=line.trim();
+  const isStart=/vos\s+chasseuses?\s+vont\s+conqu[eé]rir\b/i.test(trimmed);
+  if(isStart){if(current)blocks.push(current);current=[trimmed];}
+  else if(current&&trimmed)current.push(trimmed);
+ }
+ if(current)blocks.push(current);
+
+ return blocks.map((block,index)=>{
+  const first=block[0],seconds=parseRemainingTime(first);
+  let error="";
+  const areaMatch=first.match(/conqu[eé]rir\s+([\d \u00a0.,]+)\s*cm(?:²|2)/i);
+  const area=areaMatch?parseFrenchNumber(areaMatch[1]):null;
+  const troopLine=block.find(l=>/troupes\s+en\s+chasses?\s*:/i.test(l))||"";
+  const troops=troopLine?parseHuntTroops(troopLine):[];
+  const arrivalMatch=block.join("\n").match(/arriv[ée]e?\s+à\s+(\d{1,2})h(\d{2})/i);
+  const arrivalLabel=arrivalMatch?arrivalMatch[1].padStart(2,"0")+"h"+arrivalMatch[2]:"";
+  if(area===null||!Number.isSafeInteger(area))error="Surface à conquérir non reconnue";
+  else if(seconds===null)error="Temps restant non reconnu";
+  else if(!troopLine)error="Ligne des troupes en chasse introuvable";
+  else if(!troops.length)error="Détail des troupes non reconnu";
+  return {index:index+1,type:"hunt",destination:"Chasse",playerIndex:-1,seconds,area,troops,arrivalLabel,error};
+ });
+}
+
+function renderImportPreview(){
+ const box=$("importPreview"),button=$("confirmImport");
+ box.style.display="block";button.style.display="none";
+ if(!importResults.length){box.innerHTML='<span class="import-error">Aucune chasse reconnue. Vérifie le texte collé.</span>';return;}
+ const hasOrigin=isAuthenticated()&&!!players[getIdentifiedPlayerIndex()];
+ let validCount=0;
+ const rows=importResults.map(r=>{
+  let problem=r.error;
+  if(!problem&&!hasOrigin)problem=isAuthenticated()?"Joueur d'origine non reconnu":"Connexion requise pour importer";
+  if(!problem)validCount++;
+  const detail="🏞️ Surface : "+formatQuantity(r.area)+" cm²<br>"+r.troops.map(t=>"• "+formatQuantity(t.quantity)+" "+esc(t.name)).join("<br>");
+  return `<div class="import-item"><b>${r.index}. ⚔️ Chasse</b><br>${detail}<br>⏱️ ${r.seconds===null?"Temps inconnu":formatTime(r.seconds)}${r.arrivalLabel?"<br>🕒 Arrivée indiquée : "+esc(r.arrivalLabel):""}<br><span class="${problem?"import-error":"import-ok"}">${problem?"⚠️ "+esc(problem):"✓ Prête à importer"}</span></div>`;
+ }).join("");
+ box.innerHTML=`<b>Aperçu : ${validCount} chasse(s) prête(s) sur ${importResults.length}</b>${rows}<div class="quantity-note">Les chasses en erreur ne seront pas importées.</div>`;
+ if(validCount===importResults.length)button.style.display="block";
+}
+
+function resetImport(){
+ $("importText").value="";
+ $("importPreview").style.display="none";
+ $("confirmImport").style.display="none";
+ importResults=[];
+}
+$("analyzeImport").onclick=()=>{
+ const raw=$("importText").value;
+ if(!raw.trim()){notify("Colle d'abord le texte de chasse Fourmizzz.","warn");return;}
+ importResults=parseImportText(raw);renderImportPreview();
+};
+$("clearImport").onclick=resetImport;
+
+$("confirmImport").onclick=async()=>{
+ if(!requireAuth("importer des chasses"))return;
+ const originIndex=getIdentifiedPlayerIndex(),origin=players[originIndex];
+ if(!origin){notify("Joueur identifié introuvable dans la liste.","err");return;}
+ if(!importResults.length||importResults.some(r=>r.error)){notify("L'analyse contient des erreurs.","warn");return;}
+ const now=Date.now(),created=[];
+ for(let i=0;i<importResults.length;i++){
+  const r=importResults[i];
+  if(!Number.isSafeInteger(r.seconds)||r.seconds<=0){notify("Une chasse comporte une durée invalide.","err");return;}
+  created.push({
+   id:(now+i)+"_"+Math.floor(Math.random()*1000000),type:"hunt",
+   from:{name:origin.name,x:origin.x,y:origin.y,va:origin.va},
+   to:null,distance:null,
+   duration:r.seconds,startAt:now,arrivalAt:now+r.seconds*1000,
+   area:r.area,troops:r.troops,arrivalLabel:r.arrivalLabel||"",
+   createdBy:currentUser||origin.name
+  });
+ }
+ const huntRelay=await apiRelayAction("/api/movements",{action:"import_hunts",hunts:created});
+ if(!huntRelay.ok&&!huntRelay.skipped){notify("Chasses non enregistrées : "+(huntRelay.error||"serveur injoignable")+". Réessaie.","err");return;}
+ movements.push(...created);saveMovements();update(true);
+ notify(`✓ ${created.length} chasse(s) importée(s) pour ${origin.name}.`);
+ resetImport();
+};
+
+async function deleteMovementById(id){
+ const target=movements.find(item=>item.id===id);
+ if(!requireAuth("supprimer ce déplacement"))return;
+ if(target&&!canManageMovement(target)){notify("Action non autorisée pour ce déplacement.","err");return;}
+ await apiRelayAction("/api/movements",{action:"delete",id});
+ if(target)removeConvoyLogForMovement(target);
+ movements=movements.filter(item=>item.id!==id);
+ expandedMovements.delete(String(id));
+ expandedMovements.delete("inc_"+String(id));
+ expandedMovements.delete("hunt_"+String(id));
+ saveMovements();update(true);
+ notify("🗑️ Déplacement supprimé.");
+}
+
+function renderIncomingAttacks(){
+ const list=$("incomingAttacksList"),summary=$("incomingAttacksSummary"),empty=$("noIncomingAttacks");
+ if(!list||!summary||!empty)return;
+ const now=Date.now();
+ const targetKey=isAuthenticated()?normalizeNameKey(currentUser):"";
+ const incoming=movements
+  .filter(m=>m.type==="attack"&&now<m.arrivalAt&&targetKey&&normalizeNameKey(m.to?.name)===targetKey)
+  .sort((a,b)=>a.arrivalAt-b.arrivalAt);
+
+ const totalAnts=incoming.reduce((sum,m)=>sum+(Number(m.ants)||0),0);
+ summary.innerHTML=incoming.length
+  ?`<b>${incoming.length}</b> attaque(s) en cours vers <b>${esc(currentUser)}</b> · Total fourmis : <b>${formatQuantity(totalAnts)}</b>`
+  :(isAuthenticated()?`Aucune attaque entrante active pour <b>${esc(currentUser)}</b>.`:"Connecte-toi pour voir les attaques en cours sur toi.");
+
+ list.innerHTML="";
+ empty.style.display=incoming.length?"none":"block";
+
+ incoming.forEach(m=>{
+  const card=document.createElement("div");
+  card.className="movementcard attack";
+  const percent=Math.round(getProgress(m)*100);
+  const remaining=Math.max(0,Math.ceil((m.arrivalAt-now)/1000));
+  const open=expandedMovements.has("inc_"+String(m.id));
+  card.innerHTML=`
+   <div class="movement-summary">
+    <div class="movement-route">🐎 ${esc(m.from?.name||"?")} → ${esc(m.to?.name||currentUser)} · <span class="attack-text">${formatTime(remaining)}</span></div>
+    <button class="movement-toggle" type="button" aria-label="${open?"Masquer":"Afficher"} les détails" aria-expanded="${open}">${open?"−":"＋"}</button>
+   </div>
+   <div class="movement-details" style="display:${open?"block":"none"}">
+    <div class="movement-title attack-text">🐎 ATTAQUE ENTRANTE</div>
+    <div class="movement-quantity">🐜 Fourmis envoyées : <b>${formatQuantity(m.ants)}</b><br>🏞️ TDC : <b>${formatQuantity(m.ants)}</b></div>
+    <div class="movement-time" data-inc-t="${esc(m.id)}">${formatTime(remaining)}</div>
+    <div class="muted">Temps restant avant l'arrivée</div>
+    <div style="background:#374151;height:8px;border-radius:8px;overflow:hidden;margin:9px 0"><div data-inc-b="${esc(m.id)}" style="height:8px;width:${percent}%;background:#ef4444"></div></div>
+    <div class="muted">Progression : <span data-inc-p="${esc(m.id)}">${percent}</span>%<br>
+     Distance : ${Math.ceil(m.distance||0)}<br>
+     Départ : ${new Date(m.startAt).toLocaleString("fr-FR")}<br>
+     Arrivée prévue : ${new Date(m.arrivalAt).toLocaleString("fr-FR")}<br>
+     Déclaré par : <b>${esc(m.createdBy||m.from?.name||"?")}</b>
+    </div>
+    ${canManageMovement(m)?'<div class="movement-actions"><button class="danger" data-action="cancel-inc">Supprimer</button></div>':""}
+   </div>`;
+  card.querySelector(".movement-toggle").onclick=()=>{
+   const key="inc_"+String(m.id);
+   if(expandedMovements.has(key))expandedMovements.delete(key);else expandedMovements.add(key);
+   renderIncomingAttacks();
+  };
+  const delBtn=card.querySelector("[data-action='cancel-inc']");
+  if(delBtn)delBtn.onclick=()=>openConfirm("Supprimer cette attaque ?",()=>deleteMovementById(m.id));
+  list.appendChild(card);
+  movementCountdownNodes.set("inc_"+String(m.id),{
+   movement:m,
+   time:card.querySelector("[data-inc-t]"),
+   bar:card.querySelector("[data-inc-b]"),
+   percent:card.querySelector("[data-inc-p]")
+  });
+ });
+}
+
+function movementQuantityHTML(m){
+ if(m.type==="attack"&&m.ants!=null)return `<div class="movement-quantity">🐜 Fourmis envoyées : <b>${formatQuantity(m.ants)}</b><br>🏞️ TDC envoyé : <b>${formatQuantity(m.ants)}</b></div>`;
+ if(m.type==="convoy"&&(m.wood!=null||m.apples!=null))return `<div class="movement-quantity">🪵 Bois : <b>${formatQuantity(m.wood)}</b><br>🍎 Pommes : <b>${formatQuantity(m.apples)}</b></div>`;
+ if(m.type==="hunt"){
+  const troops=Array.isArray(m.troops)?m.troops:[];
+  return `<div class="movement-quantity">🏞️ Surface à conquérir : <b>${formatQuantity(m.area)} cm²</b><br><b>🐜 Troupes en chasse :</b><br>${troops.map(t=>"• "+formatQuantity(t.quantity)+" "+esc(t.name)).join("<br>")}</div>`;
+ }
+ return "";
+}
+
+document.querySelectorAll(".movement-tab").forEach(button=>{
+ button.onclick=()=>{
+  activeMovementTab=button.dataset.type;
+  document.querySelectorAll(".movement-tab").forEach(b=>b.classList.toggle("active",b===button));
+  renderMovements();
+ };
+});
+
+function buildMovementCardElement(m,now,keyPrefix=""){
+ const card=document.createElement("div");card.className="movementcard "+m.type;
+ const percent=Math.round(getProgress(m)*100),remaining=Math.max(0,Math.ceil((m.arrivalAt-now)/1000));
+ const nodeKey=keyPrefix+String(m.id);
+ const open=expandedMovements.has(nodeKey);
+ const typeName=m.type==="attack"?"🐎 ATTAQUE":m.type==="convoy"?"📦 CONVOI":"⚔️ CHASSE";
+ const typeClass=m.type==="attack"?"attack-text":m.type==="convoy"?"convoy-text":"hunt-text";
+ const route=m.type==="hunt"?`⚔️ ${esc(m.from.name)} · Chasse`:`${esc(m.from.name)} → ${esc(m.to?.name||"?")}`;
+ const color=m.type==="attack"?"#ef4444":m.type==="convoy"?"#3b82f6":"#eab308";
+ card.innerHTML=`
+  <div class="movement-summary"><div class="movement-route">${route}</div>
+  <button class="movement-toggle" type="button" aria-label="${open?"Masquer":"Afficher"} les détails" aria-expanded="${open}">${open?"−":"＋"}</button></div>
+  <div class="movement-details" style="display:${open?"block":"none"}">
+   <div class="movement-title ${typeClass}">${typeName}</div>${movementQuantityHTML(m)}
+   <div class="movement-time" data-t="${esc(nodeKey)}">${formatTime(remaining)}</div>
+   <div class="muted">Temps restant avant ${m.type==="hunt"?"la fin de la chasse":"l'arrivée"}</div>
+   <div style="background:#374151;height:8px;border-radius:8px;overflow:hidden;margin:9px 0"><div data-b="${esc(nodeKey)}" style="height:8px;width:${percent}%;background:${color}"></div></div>
+   <div class="muted">Progression : <span data-p="${esc(nodeKey)}">${percent}</span>%<br>
+    ${m.type==="hunt"?"Joueur : "+esc(m.from.name)+"<br>":"Distance : "+Math.ceil(m.distance||0)+"<br>"}
+    Départ : ${new Date(m.startAt).toLocaleString("fr-FR")}<br>
+    ${m.type==="hunt"&&m.arrivalLabel?"Heure d'arrivée indiquée par Fourmizzz : "+esc(m.arrivalLabel)+"<br>":""}
+    ${m.type==="hunt"?"Fin prévue : ":"Arrivée prévue : "}${new Date(m.arrivalAt).toLocaleString("fr-FR")}<br>
+    Déclaré par : <b>${esc(m.createdBy||m.from.name)}</b>
+   </div>${canManageMovement(m)?'<div class="movement-actions"><button class="danger" data-action="cancel">Annuler</button></div>':""}
+  </div>`;
+ card.querySelector(".movement-toggle").onclick=()=>{
+  if(expandedMovements.has(nodeKey))expandedMovements.delete(nodeKey);else expandedMovements.add(nodeKey);
+  renderMovements();
+ };
+ const cancelBtn=card.querySelector("[data-action='cancel']");
+ if(cancelBtn)cancelBtn.onclick=()=>openConfirm("Supprimer ce déplacement ?",()=>deleteMovementById(m.id));
+ movementCountdownNodes.set(nodeKey,{
+  movement:m,
+  time:card.querySelector("[data-t]"),
+  bar:card.querySelector("[data-b]"),
+  percent:card.querySelector("[data-p]")
+ });
+ return card;
+}
+
+function renderActiveHunts(now){
+ const box=$("activeHuntsList"),empty=$("noActiveHunts");
+ if(!box||!empty)return;
+ box.innerHTML="";
+ const activeHunts=movements
+  .filter(m=>now<m.arrivalAt&&m.type==="hunt")
+  .sort((a,b)=>a.arrivalAt-b.arrivalAt);
+ empty.style.display=activeHunts.length?"none":"block";
+ activeHunts.forEach(m=>box.appendChild(buildMovementCardElement(m,now,"hunt_")));
+}
+
+function renderMovements(){
+ const active=$("activeMovements"),finished=$("finishedMovements");
+ active.innerHTML="";finished.innerHTML="";
+ movementCountdownNodes.clear();
+ const now=Date.now();
+ renderIncomingAttacks();
+ renderActiveHunts(now);
+ const completed=movements.filter(m=>now>=m.arrivalAt);
+ const filtered=movements.filter(m=>now<m.arrivalAt&&m.type===activeMovementTab);
+ $("noMovements").style.display=filtered.length?"none":"block";
+ $("noMovements").textContent=activeMovementTab==="attack"?"Aucune attaque en cours.":activeMovementTab==="convoy"?"Aucun convoi en cours.":"Aucune chasse en cours.";
+ $("noFinished").style.display=completed.length?"none":"block";
+ $("clearFinished").style.display=completed.length&&isAdmin()?"block":"none";
+
+ filtered.forEach(m=>active.appendChild(buildMovementCardElement(m,now,"")));
+
+ completed.slice().reverse().forEach(m=>{
+  const card=document.createElement("div");card.className="movementcard "+m.type;
+  const title=m.type==="attack"?"🐎 Attaque":m.type==="convoy"?"📦 Convoi":"⚔️ Chasse";
+  const route=m.type==="hunt"?`<b>${esc(m.from.name)}</b> · Chasse`:`<b>${esc(m.from.name)}</b> → <b>${esc(m.to?.name||"?")}</b>`;
+  card.innerHTML=`<div class="movement-title finished-text">✓ TERMINÉ</div>${route}${movementQuantityHTML(m)}
+   <div class="muted" style="margin-top:8px">${title}<br>
+   ${m.type==="hunt"?"Fin de chasse : ":"Arrivée : "}${new Date(m.arrivalAt).toLocaleString("fr-FR")}<br>
+   Durée : ${formatTime(m.duration)}<br>
+   Déclaré par : <b>${esc(m.createdBy||m.from.name)}</b></div>
+   ${canManageMovement(m)?'<div class="movement-actions"><button class="danger" data-action="delete">Supprimer</button></div>':""}`;
+  const delBtn=card.querySelector("[data-action='delete']");
+  if(delBtn)delBtn.onclick=()=>openConfirm("Supprimer ce déplacement de l'historique ?",()=>deleteMovementById(m.id));
+  finished.appendChild(card);
+ });
+}
+
+$("clearFinished").onclick=()=>{
+ if(!isAdmin()){notify("Seul un administrateur peut vider l'historique complet.","err");return;}
+ openConfirm("Effacer tout l'historique des déplacements terminés ?",async()=>{
+  await apiRelayAction("/api/movements",{action:"clear_finished"});
+  movements=movements.filter(m=>Date.now()<m.arrivalAt);saveMovements();update(true);
+  notify("🧹 Historique des déplacements terminés effacé.");
+ });
+};
+
+$("syncStatus").addEventListener("click",()=>$("syncStatus").classList.toggle("expanded"));
+
+function renderPlayerList(){
+ const list=$("playerlist");
+ const signature=JSON.stringify(players.map(p=>[
+  p.name,p.x,p.y,p.va,p.rank,p.tdc,p.buildingScore,p.technologyScore,
+  p.alliance,p.grade,p.fourmizzzId,p.color,p.onHoliday,p.isBanned
+ ]).concat([currentUser,isAuthenticated(),isAdmin()]));
+ if(signature===playerListSignature&&list.childElementCount===players.length)return;
+ playerListSignature=signature;
+ list.innerHTML="";
+ players.forEach((p,i)=>{
+  const zero=isCoordsZero(p);
+  const card=document.createElement("div");card.className="playercard"+(zero?" coord-zero":"");
+  const title=document.createElement("div");title.className="player-card-title";
+  const name=document.createElement("b");name.textContent=p.name;title.appendChild(name);
+  if(zero){
+   const badge=document.createElement("span");badge.className="tag coord0";badge.textContent="⚠️ (0,0) à vérifier";
+   title.appendChild(badge);
+  }
+  card.appendChild(title);
+
+  const coords=document.createElement("div");coords.className="muted";coords.style.marginTop="5px";
+  coords.textContent=`Coordonnées : X ${p.x} · Y ${p.y}`;card.appendChild(coords);
+
+  const apiBox=document.createElement("div");apiBox.className="player-api";
+  const apiTitle=document.createElement("div");apiTitle.className="api-title";
+  apiTitle.textContent="📊 Données Fourmizzz S5";apiBox.appendChild(apiTitle);
+  const addApiLine=(label,value)=>{
+   const line=document.createElement("div"),strong=document.createElement("strong"),span=document.createElement("span");
+   strong.textContent=label+" : ";
+   span.textContent=value===null||value===undefined||value===""?"—":String(value);
+   line.append(strong,span);apiBox.appendChild(line);
+  };
+  addApiLine("TDC",p.tdc===null?"Non synchronisé":formatQuantity(p.tdc)+" cm²");
+  addApiLine("Score bâtiments",p.buildingScore===null?"Non synchronisé":formatQuantity(p.buildingScore));
+  addApiLine("Score technologie",p.technologyScore===null?"Non synchronisé":formatQuantity(p.technologyScore));
+  addApiLine("Alliance",p.alliance);
+  addApiLine("Grade",p.grade);
+  if(p.fourmizzzId!==null&&p.fourmizzzId!==undefined)addApiLine("ID Fourmizzz",p.fourmizzzId);
+  card.appendChild(apiBox);
+
+  const canEditPlayer=isAdmin()||(isAuthenticated()&&normalizeNameKey(p.name)===normalizeNameKey(currentUser));
+
+  const vaBox=document.createElement("div");vaBox.className="player-va";
+  const vaLabel=document.createElement("label");vaLabel.textContent="Vitesse d'attaque";
+  const vaInput=document.createElement("input");
+  vaInput.type="number";vaInput.min="0";vaInput.max="20";vaInput.step="1";vaInput.value=p.va;
+  vaInput.disabled=!canEditPlayer;
+  vaInput.addEventListener("change",async()=>{
+   if(!requireAuth("modifier la vitesse d'attaque")){vaInput.value=p.va;return;}
+   if(vaInput.value.trim()===""||!Number.isFinite(Number(vaInput.value))){vaInput.value=p.va;return;}
+   p.va=Math.max(0,Math.min(20,Math.floor(Number(vaInput.value))));vaInput.value=p.va;
+   await apiRelayAction("/api/players",{action:"update",player:p});
+   saveData();update();
+  });
+  vaBox.append(vaLabel,vaInput);card.appendChild(vaBox);
+
+  const rankBox=document.createElement("div");rankBox.className="player-rank";
+  const rankLabel=document.createElement("label");rankLabel.textContent="Rang du joueur";
+  const rankInput=document.createElement("input");
+  rankInput.type="text";rankInput.placeholder="Ex : G1 à G10, C ou P1 à P20";rankInput.value=p.rank||"";
+  rankInput.disabled=!canEditPlayer;
+  rankInput.addEventListener("change",async()=>{
+   if(!requireAuth("modifier le rang")){rankInput.value=p.rank||"";return;}
+   p.rank=rankInput.value.trim();
+   await apiRelayAction("/api/players",{action:"update",player:p});
+   saveData();renderMap();
+  });
+  rankBox.append(rankLabel,rankInput);card.appendChild(rankBox);
+
+  if(canDeletePlayer()){
+   const actions=document.createElement("div");actions.className="cardbuttons";
+   const del=document.createElement("button");del.className="danger";del.textContent="🗑️ Supprimer ce joueur";
+   del.onclick=()=>{
+    openConfirm("Supprimer "+p.name+" de la liste ? Ses déplacements déjà enregistrés sont conservés.",async()=>{
+     await apiRelayAction("/api/players",{action:"delete",name:p.name});
+     players.splice(i,1);
+     selectedOrigin=getIdentifiedPlayerIndex();
+     selectedDestination=Math.max(0,Math.min(selectedDestination,players.length-1));
+     saveData();update(true);
+     notify("🗑️ "+p.name+" retiré de la liste.");
+    });
+   };
+   actions.appendChild(del);card.appendChild(actions);
+  }
+  list.appendChild(card);
+ });
+}
+
+$("savePlayer").onclick=async()=>{
+ if(!requireAuth("ajouter un joueur"))return;
+ if(!isAdmin()){notify("Action réservée aux administrateurs.","err");return;}
+ const name=$("newName").value.trim(),x=$("newX").value.trim(),y=$("newY").value.trim(),va=$("newVA").value.trim();
+ if(!name||x===""||y===""){notify("Renseigne le pseudo et les coordonnées X et Y.","warn");return;}
+  if(players.some(p=>normalizeNameKey(p.name)===normalizeNameKey(name))){notify("Ce pseudo existe déjà dans la liste.","warn");return;}
+ const newPlayer=normalizeLocalPlayer({name,x:Number(x),y:Number(y),va:Math.max(0,Math.min(20,Math.floor(Number(va)||0)))});
+ await apiRelayAction("/api/players",{action:"create",player:newPlayer});
+ players.push(newPlayer);
+ saveData();
+ $("newName").value="";$("newX").value="";$("newY").value="";$("newVA").value="0";
+ $("formMessage").textContent="✓ Joueur ajouté.";
+ update(true);
+ notify("➕ Joueur ajouté : "+name);
+};
+
+const announced=new Set();
+function announceArrivals(now,silent){
+ movements.forEach(m=>{
+  if(now<m.arrivalAt||announced.has(m.id))return;
+  announced.add(m.id);
+  if(silent)return;
+  notify(m.type==="hunt"?"⚔️ Chasse terminée : "+m.from.name
+   :(m.type==="attack"?"🐎 Attaque arrivée : ":"📦 Convoi arrivé : ")+m.from.name+" → "+(m.to?.name||"?"));
+ });
+}
+
+function renderNext(){
+ const box=$("nextList");if(!box)return;
+ const now=Date.now(),cur=movements.filter(m=>now<m.arrivalAt).sort((a,b)=>a.arrivalAt-b.arrivalAt);
+ const counts={attack:0,convoy:0,hunt:0},totals={ants:0,apples:0,wood:0};
+ cur.forEach(m=>{
+  if(counts[m.type]!==undefined)counts[m.type]++;
+  if(m.type==="attack")totals.ants+=Number(m.ants)||0;
+  if(m.type==="convoy"){
+   totals.apples+=Number(m.apples)||0;
+   totals.wood+=Number(m.wood)||0;
+  }
+ });
+ $("nextStats").innerHTML=`🐎 ${counts.attack} attaque(s) · 📦 ${counts.convoy} convoi(s) · ⚔️ ${counts.hunt} chasse(s)`
+  +(totals.ants?`<br>🐜 ${formatQuantity(totals.ants)} fourmis en route`:"")
+  +(totals.apples||totals.wood?`<br>🍎 ${formatQuantity(totals.apples)} · 🪵 ${formatQuantity(totals.wood)} en convoi`:"");
+ box.replaceChildren();nextCountdownNodes.clear();
+ if(!cur.length){
+  const empty=document.createElement("div");empty.className="muted";empty.textContent="Aucun déplacement en cours.";box.appendChild(empty);return;
+ }
+ cur.slice(0,5).forEach(m=>{
+  const left=Math.max(0,Math.ceil((m.arrivalAt-now)/1000));
+  const icon=m.type==="attack"?"🐎":m.type==="convoy"?"📦":"⚔️";
+  const route=m.type==="hunt"?`${m.from.name} · chasse`:`${m.from.name} → ${m.to?.name||"?"}`;
+  const row=document.createElement("div");row.className="next-item"+(left<600?" soon":"");
+  const label=document.createElement("span");label.textContent=icon+" "+route;
+  const time=document.createElement("b");time.textContent=formatTime(left);
+  row.style.cursor="pointer";
+  row.addEventListener("click",e=>{
+   e.stopPropagation();
+   const fd=t=>new Date(t).toLocaleString("fr-FR",{day:"2-digit",month:"2-digit",hour:"2-digit",minute:"2-digit",second:"2-digit"});
+   const rw=(l,v)=>`<div class="row"><span>${l}</span><b>${v}</b></div>`;
+   const title=m.type==="attack"?"🐎 Attaque":m.type==="convoy"?"📦 Convoi":"⚔️ Chasse";
+   const html=`<h4><span>${title}</span><button class="bx" type="button" id="bubbleClose">✕</button></h4>`
+    +rw("Départ",esc(m.from.name))+(m.type!=="hunt"?rw("Arrivée",esc(m.to?.name||"?")):"")
+    +(m.type==="convoy"?rw("🪵 Bois",formatQuantity(m.wood))+rw("🍎 Pommes",formatQuantity(m.apples)):"")
+    +(m.type==="attack"?rw("🐜 Fourmis",formatQuantity(m.ants)):"")
+    +(m.startAt?rw("Parti le",fd(m.startAt)):"")+rw("Arrivée le",fd(m.arrivalAt))
+    +rw("Temps restant",formatTime(Math.max(0,Math.ceil((m.arrivalAt-Date.now())/1000))))
+    +(m.createdBy?rw("Saisi par",esc(m.createdBy)):"");
+   showBubble(row,null,html);
+  });
+  row.append(label,time);box.appendChild(row);
+  nextCountdownNodes.set(String(m.id),{movement:m,row,time});
+ });
+}
+
+function updateNextCountdowns(now){
+ for(const {movement,row,time} of nextCountdownNodes.values()){
+  const left=Math.max(0,Math.ceil((movement.arrivalAt-now)/1000));
+  time.textContent=formatTime(left);
+  row.classList.toggle("soon",left<600);
+ }
+}
+
+function updateMovementCountdowns(now){
+ for(const {movement,time,bar,percent} of movementCountdownNodes.values()){
+  if(now>=movement.arrivalAt)continue;
+  if(time)time.textContent=formatTime(Math.ceil((movement.arrivalAt-now)/1000));
+  const pct=Math.round(getProgress(movement)*100);
+  if(bar)bar.style.width=pct+"%";
+  if(percent)percent.textContent=pct;
+ }
+}
+
+function refreshNextArrival(){
+ nextArrivalAt=Infinity;
+ for(const m of movements){
+  if(Number.isFinite(m.arrivalAt)&&m.arrivalAt<nextArrivalAt)nextArrivalAt=m.arrivalAt;
+ }
+}
+
+function renderRanking(){
+ const box=$("rankList");if(!box)return;
+ const list=players.filter(p=>p.tdc!==null&&p.tdc!==undefined).sort((a,b)=>b.tdc-a.tdc);
+ if(!list.length){box.innerHTML='<div class="muted">Lance une synchronisation pour afficher le classement.</div>';return;}
+ const total=list.reduce((t,p)=>t+p.tdc,0);
+ box.innerHTML=`<div class="stats-line">TDC total : <b>${formatQuantity(total)} cm²</b> · moyenne : <b>${formatQuantity(Math.round(total/list.length))} cm²</b></div>`
+  +list.map((p,i)=>`<div class="next-item"><span>${["🥇","🥈","🥉"][i]||(i+1)+"."} <a href="#" class="pname" data-i="${players.indexOf(p)}">${esc(p.name)}</a>${isCoordsZero(p)?' <span class="tag coord0">(0,0)</span>':""}</span><b>${formatQuantity(p.tdc)}</b></div>`).join("");
+}
+
+function closeBubble(){$("bubble").style.display="none";}
+function showBubble(anchor,p,customHtml){
+ const ranked=players.filter(x=>x.tdc!==null&&x.tdc!==undefined).sort((a,b)=>b.tdc-a.tdc);
+ const pos=ranked.indexOf(p)+1;
+ const v=x=>x===null||x===undefined||x===""?"—":esc(x);
+ const row=(l,val)=>`<div class="row"><span>${l}</span><b>${val}</b></div>`;
+ const b=$("bubble");
+ b.innerHTML=customHtml?customHtml:`<h4><span>${esc(p.name)}</span><button class="bx" type="button" id="bubbleClose">✕</button></h4>`
+  +row("Classement TDC",pos?pos+" / "+ranked.length:"—")
+  +row("TDC",p.tdc==null?"—":formatQuantity(p.tdc)+" cm²")
+  +row("Score bâtiments",p.buildingScore==null?"—":formatQuantity(p.buildingScore))
+  +row("Score technologie",p.technologyScore==null?"—":formatQuantity(p.technologyScore))
+  +row("Alliance",v(p.alliance))+row("Grade",v(p.grade))
+  +row("Vitesse d'attaque",v(p.va))
+  +row("Coordonnées","X "+p.x+" · Y "+p.y+(isCoordsZero(p)?" (à vérifier)":""))
+  +(p.rank!==""?row("Rang local",v(p.rank)):"")
+  +(p.onHoliday?row("Vacances","Oui"):"")+(p.isBanned?row("Banni","Oui"):"")
+  +(p.fourmizzzId!=null?row("ID Fourmizzz",v(p.fourmizzzId)):"");
+ b.style.display="block";
+ const r=anchor.getBoundingClientRect(),w=b.offsetWidth,h=b.offsetHeight;
+ let left=Math.max(10,Math.min(r.left,window.innerWidth-w-10));
+ const below=r.bottom+h+14<window.innerHeight||r.top<h+14;
+ b.style.left=left+"px";
+ b.style.top=(below?r.bottom+10:r.top-h-10)+"px";
+ b.className=below?"below":"above";
+ b.style.setProperty("--ax",Math.max(12,Math.min(w-24,r.left+r.width/2-left-6))+"px");
+ $("bubbleClose").onclick=closeBubble;
+}
+$("rankList").addEventListener("click",e=>{
+ const a=e.target.closest(".pname");if(!a)return;
+ e.preventDefault();e.stopPropagation();
+ const p=players[Number(a.dataset.i)];if(p)showBubble(a,p);
+});
+document.addEventListener("click",e=>{if(!e.target.closest("#bubble"))closeBubble();});
+document.addEventListener("keydown",e=>{if(e.key==="Escape"){closeBubble();closeAuthModal();}});
+window.addEventListener("scroll",closeBubble,{passive:true});
+
+function nearbyHTML(a){
+ const near=players.filter(p=>p!==a).map(p=>({p,d:distance(a,p)})).sort((x,y)=>x.d-y.d).slice(0,5);
+ if(!near.length)return "";
+ return `<div class="muted" style="margin-top:10px"><b>📍 Les plus proches de ${esc(a.name)}</b><br>`
+  +near.map(({p,d})=>`${esc(p.name)} · distance ${Math.ceil(d)} · ${formatTime(travelTime(d,a.va))}`).join("<br>")+"</div>";
+}
+
+function fillGo(){
+ $("goPlayer").innerHTML='<option value="">🔎 Centrer la carte sur un joueur…</option>'
+  +players.map((p,i)=>`<option value="${i}">${esc(p.name)}</option>`).join("");
+}
+$("goPlayer").onchange=e=>{
+ const p=players[Number(e.target.value)];
+ if(e.target.value===""||!p)return;
+ zoom=2.5;panX=-(sx(p.x)-450)*zoom;panY=-(sy(p.y)-280)*zoom;
+ clampPan();applyTransform();
+ $("map").scrollIntoView({behavior:"smooth",block:"center"});
+ e.target.value="";
+};
+
+$("copySummary").onclick=async()=>{
+ const now=Date.now(),cur=movements.filter(m=>now<m.arrivalAt).sort((a,b)=>a.arrivalAt-b.arrivalAt);
+ const lines=cur.map(m=>{
+  const t=formatTime(Math.ceil((m.arrivalAt-now)/1000));
+  if(m.type==="hunt")return `⚔️ ${m.from.name} · chasse · fin dans ${t}`;
+  const what=m.type==="attack"?`🐜 ${formatQuantity(m.ants)}`:`🍎 ${formatQuantity(m.apples)} · 🪵 ${formatQuantity(m.wood)}`;
+  return `${m.type==="attack"?"🐎":"📦"} ${m.from.name} → ${m.to?.name||"?"} · ${what} · dans ${t}`;
+ });
+ const text=lines.length?"📡 Déplacements en cours\n"+lines.join("\n"):"Aucun déplacement en cours.";
+ try{await navigator.clipboard.writeText(text);notify("📋 Résumé copié !");}
+ catch(e){notify("Copie impossible dans ce navigateur.","warn");}
+};
+
+const ICON_SPEED=1300;
+const ICONS_PER_ATTACK=2;
+const ICONS_PER_CONVOY=2;
+function placeIcon(a,now){
+ if(a.dur<=0)return;
+ const ph=((((now-a.start)*ICON_SPEED)/a.dur)+a.off)%1;
+ a.icon.setAttribute("x",a.x1+a.dx*ph);
+ a.icon.setAttribute("y",a.y1+a.dy*ph);
+}
+let iconAnimationFrame=0;
+function animateIcons(){
+ iconAnimationFrame=0;
+ if(document.hidden||!animIcons.length)return;
+ const now=Date.now();
+ for(const a of animIcons)placeIcon(a,now);
+ iconAnimationFrame=requestAnimationFrame(animateIcons);
+}
+function syncIconAnimation(){
+ if(document.hidden||!animIcons.length){
+  if(iconAnimationFrame)cancelAnimationFrame(iconAnimationFrame);
+  iconAnimationFrame=0;
+  return;
+ }
+ if(!iconAnimationFrame)iconAnimationFrame=requestAnimationFrame(animateIcons);
+}
+document.addEventListener("visibilitychange",syncIconAnimation);
+
+function drawRange(g){
+ if(!showRange)return;
+ const o=players[selectedOrigin];if(!o)return;
+ const scale=MAP_W/(XMAX-XMIN),full=7.375*86400*Math.pow(0.9,o.va),cx=sx(o.x),cy=sy(o.y);
+ [1800,3600,10800,21600,43200,86400,172800,345600].filter(t=>t<full*0.97).forEach(t=>{
+  const r=-350*Math.log(1-t/full)*scale;
+  el("circle",{cx,cy,r,class:"ring"},g);
+  el("text",{x:cx,y:cy-r-2,class:"ring-label"},g).textContent=t<3600?(t/60)+"min":t<86400?(t/3600)+"h":(t/86400)+"j";
+ });
+}
+$("fullMap").onclick=()=>{$("mapwrap").classList.add("map-full");document.body.style.overflow="hidden";};
+$("mapClose").onclick=()=>{$("mapwrap").classList.remove("map-full");document.body.style.overflow="";};
+
+const TABS={main:"tabMain",hunters:"tabHunters",map:"tabMap",convoy:"tabConvoy",players:"tabPlayers",stats:"tabStats",rank:"tabRank"};
+function showTab(name){
+ for(const k in TABS)$(TABS[k]).style.display=k===name?"block":"none";
+ document.querySelectorAll(".main-tab").forEach(b=>b.classList.toggle("active",b.dataset.tab===name));
+ try{localStorage.setItem("fourmizzz_active_tab",name);}catch(e){}
+ if(name==="map"){clampPan();applyTransform();renderMap();}
+ if(name==="rank"){renderRecv();renderAttacksAndTerrainStats30();}
+ window.scrollTo(0,0);
+}
+document.querySelectorAll(".main-tab").forEach(b=>b.addEventListener("click",()=>showTab(b.dataset.tab)));
+
+function playerIndexByName(n){
+ const key=normalizeNameKey(n);
+ return players.findIndex(p=>normalizeNameKey(p.name)===key);
+}
+function fillReqPlayers(){
+ const sel=$("reqPlayer"),prev=sel.value;
+ sel.innerHTML=players.map((p,i)=>`<option value="${i}">${esc(p.name)}</option>`).join("");
+ if(prev!==""&&players[Number(prev)])sel.value=prev;
+}
+function reqDelivered(r){
+ return r.deliveries.reduce((t,d)=>({wood:t.wood+(d.wood||0),apples:t.apples+(d.apples||0)}),{wood:0,apples:0});
+}
+function reqRemaining(r){
+ const d=reqDelivered(r);
+ return{wood:Math.max(0,(r.wood||0)-d.wood),apples:Math.max(0,(r.apples||0)-d.apples)};
+}
+const reqDrafts={};
+function renderRecv(){
+ const sb=$("sentList");
+ if(sb){
+  const sr=players.map(p=>({p,...sent30(p.name)})).filter(x=>x.wood||x.apples).sort((a,b)=>(b.wood+b.apples)-(a.wood+a.apples));
+  sb.innerHTML=sr.length?sr.map(x=>`<div class="next-item"><span>${esc(x.p.name)}</span><b>🪵 ${formatQuantity(x.wood)} · 🍎 ${formatQuantity(x.apples)}</b></div>`).join(""):'<div class="muted">Aucun convoi envoyé sur les 30 derniers jours.</div>';
+ }
+ const box=$("recvList");if(!box)return;
+ const rows=players.map(p=>({p,...received30(p.name)})).filter(x=>x.wood||x.apples).sort((a,b)=>(b.wood+b.apples)-(a.wood+a.apples));
+ box.innerHTML=rows.length?rows.map(x=>`<div class="next-item"><span>${esc(x.p.name)}</span><b>🪵 ${formatQuantity(x.wood)} · 🍎 ${formatQuantity(x.apples)}</b></div>`).join("")
+  :'<div class="muted">Aucun convoi reçu sur les 30 derniers jours.</div>';
+ renderAttacksAndTerrainStats30();
+}
+function updateReqProgress(now){
+ document.querySelectorAll(".req-prog").forEach(el=>{
+  const st=Number(el.dataset.s),en=Number(el.dataset.e),pct=en>st?Math.max(0,Math.min(100,(now-st)/(en-st)*100)):100;
+  el.firstElementChild.style.width=pct+"%";
+  const l=el.nextElementSibling;if(l)l.textContent=Math.round(pct)+" % · arrivée dans "+formatTime(Math.max(0,Math.ceil((en-now)/1000)));
+ });
+}
+function renderRequests(force){
+ if(!$("reqList"))return;
+ const ae=document.activeElement;
+ const editing=!force&&ae&&$("reqList").contains(ae)&&(ae.tagName==="INPUT"||ae.tagName==="SELECT");
+ pruneLog();
+ const openCount=convoyRequests.filter(r=>r.status!=="done").length;
+ $("reqBadge").textContent=openCount||"";
+ if($("tabStats")?.style.display!=="none")renderRecv();
+ if(editing)return;
+ fillReqPlayers();
+ let list=convoyRequests.slice().sort((a,b)=>(a.status==="done")-(b.status==="done")||(a.status==="done"?(b.doneAt||0)-(a.doneAt||0):a.createdAt-b.createdAt));
+ const nowT=Date.now(),transit=r=>(r.deliveries||[]).filter(d=>d.arrivalAt>nowT);
+ if(reqFilter==="open")list=list.filter(r=>r.status!=="done");
+ else if(reqFilter==="done")list=list.filter(r=>r.status==="done");
+ else if(reqFilter==="ongoing"){
+  list=list.filter(r=>transit(r).length);
+  if(!list.length){$("reqList").innerHTML='<div class="muted">Aucun convoi en cours de livraison.</div>';return;}
+  $("reqList").innerHTML=list.map(r=>`<div class="req-card"><div class="req-head"><b>${esc(r.player)}</b><span class="tag taken">🚚 En cours</span></div>`
+   +`<div class="muted">Demande : 🪵 ${formatQuantity(r.wood)} · 🍎 ${formatQuantity(r.apples)}</div>`
+   +transit(r).map(d=>{const mv=movements.find(m=>m.id===d.movementId);const st=mv&&mv.startAt?mv.startAt:(d.at||nowT);
+    return `<div style="margin-top:8px"><div class="next-item"><span>${esc(d.by)} → ${esc(r.player)}</span><b>🪵 ${formatQuantity(d.wood)} · 🍎 ${formatQuantity(d.apples)}</b></div>`
+    +`<div class="req-prog" data-s="${st}" data-e="${d.arrivalAt}" style="height:8px;background:#374151;border-radius:6px;overflow:hidden;margin-top:4px"><i style="display:block;height:100%;width:0;background:#3b82f6"></i></div>`
+    +`<div class="muted req-left" data-e="${d.arrivalAt}"></div></div>`;}).join("")+`</div>`).join("");
+  updateReqProgress(nowT);return;
+ }
+ if(!list.length){$("reqList").innerHTML='<div class="muted">'+(reqFilter==="done"?"Aucune demande archivée.":"Aucune demande.")+'</div>';return;}
+ const fmtDate=t=>new Date(t).toLocaleString("fr-FR",{day:"2-digit",month:"2-digit",hour:"2-digit",minute:"2-digit"});
+ $("reqList").innerHTML=list.map(r=>{
+  const dest=players[playerIndexByName(r.player)];
+  const done=r.status==="done";
+  const rem=reqRemaining(r),del=reqDelivered(r),rc=received30(r.player);
+  const tag=done?'<span class="tag done">📦 Archivée</span>':del.wood||del.apples?'<span class="tag taken">🚚 Partielle</span>':'<span class="tag">🟦 Ouverte</span>';
+  const delivered=r.deliveries.length?`<div class="muted">Envoyé : ${r.deliveries.map(d=>`${esc(d.by)}${d.loggedBy&&d.loggedBy!==d.by?" (saisi par "+esc(d.loggedBy)+")":""} (🪵 ${formatQuantity(d.wood)} · 🍎 ${formatQuantity(d.apples)})`).join(" ; ")}</div>`:"";
+  const authorLine=(r.createdBy&&r.createdBy!==r.player?` · saisie par <b>${esc(r.createdBy)}</b>`:"")+(done&&r.archivedBy?` · archivée par <b>${esc(r.archivedBy)}</b>`:"");
+  let body=`<div>🪵 ${formatQuantity(r.wood)} · 🍎 ${formatQuantity(r.apples)}`
+   +(!done&&(del.wood||del.apples)?` <span class="muted">· reste 🪵 ${formatQuantity(rem.wood)} · 🍎 ${formatQuantity(rem.apples)}</span>`:"")+`</div>`
+   +(r.note?`<div class="req-note">💬 ${esc(r.note)}</div>`:"")+delivered
+   +`<div class="muted">Demandé le ${fmtDate(r.createdAt)}${done&&r.doneAt?" · archivée le "+fmtDate(r.doneAt):""}${authorLine} · Reçu sur 30 j : 🪵 ${formatQuantity(rc.wood)} · 🍎 ${formatQuantity(rc.apples)}</div>`;
+  let actions="";
+  const isAcceptedOrTreated=done||(Array.isArray(r.deliveries)&&r.deliveries.length>0);
+  const isOwner=isAuthenticated()&&!!currentUser&&(normalizeNameKey(r.player)===normalizeNameKey(currentUser)||normalizeNameKey(r.createdBy)===normalizeNameKey(currentUser));
+  const canDelete=isOwner&&!isAcceptedOrTreated;
+  if(!done&&isAuthenticated()){
+   const dr=reqDrafts[r.id]||{};
+   const senderIdx=getIdentifiedPlayerIndex();
+   const senderPlayer=senderIdx>=0?players[senderIdx]:null;
+   const senderInfo=senderPlayer&&dest?`${esc(senderPlayer.name)} · ${formatTime(travelTime(distance(senderPlayer,dest),senderPlayer.va))}`:esc(senderPlayer?.name||currentUser||"Non identifié");
+   const wv=dr.wood!==undefined?dr.wood:(rem.wood||""),av=dr.apples!==undefined?dr.apples:(rem.apples||"");
+   body+=`<div class="req-send">
+    <div class="muted" style="margin-bottom:6px">Expéditeur reconnu automatiquement : <b>${senderInfo}</b></div>
+    <div class="formgrid">
+    ${rem.wood>0?`<div><label>🪵 Bois à envoyer</label><input data-f="wood" data-id="${esc(r.id)}" type="number" min="0" max="${rem.wood}" step="1" value="${esc(wv)}"></div>`:""}
+    ${rem.apples>0?`<div><label>🍎 Pommes à envoyer</label><input data-f="apples" data-id="${esc(r.id)}" type="number" min="0" max="${rem.apples}" step="1" value="${esc(av)}"></div>`:""}
+    </div></div>`;
+   actions+=`<button class="primary" data-act="send" data-id="${esc(r.id)}">🚚 Lancer le convoi</button>`;
+   if(canArchiveRequest(r)){
+    actions+=`<button data-act="close" data-id="${esc(r.id)}">📦 Archiver</button>`;
+   }
+  }
+  if(canDelete){
+   actions+=`<button class="danger" data-act="del" data-id="${esc(r.id)}">🗑️</button>`;
+  }
+  return `<div class="req-card ${done?"done":""}">
+   <div class="req-head"><b>${esc(r.player)}</b>${tag}</div>
+   ${body}
+   <div class="req-actions">${actions}</div></div>`;
+ }).join("");
+}
+
+$("reqSubmit").onclick=async()=>{
+ if(!requireAuth("envoyer une demande de convoi"))return;
+ const idx=getIdentifiedPlayerIndex();
+ const p=idx>=0?players[idx]:null;
+ if(!p){notify("Joueur identifié introuvable dans la liste.","err");return;}
+ const w=$("reqWood").value.trim(),a=$("reqApples").value.trim();
+ const wood=w===""?0:Number(w),apples=a===""?0:Number(a);
+ if(!Number.isSafeInteger(wood)||!Number.isSafeInteger(apples)||wood<0||apples<0||(wood===0&&apples===0)){
+  notify("Indique une quantité de bois et/ou de pommes (entier positif).","warn");return;
+ }
+ const note=$("reqNote").value.trim();
+ if(!note){notify("Le motif de la demande est obligatoire.","warn");$("reqNote").focus();return;}
+ const reqItem={id:Date.now()+"_"+Math.floor(Math.random()*1e6),player:p.name,wood,apples,
+  note,status:"open",deliveries:[],createdAt:Date.now(),createdBy:currentUser||p.name};
+ const reqRelay=await apiRelayAction("/api/requests",{action:"create",request:reqItem});
+ if(!reqRelay.ok&&!reqRelay.skipped){notify("Demande non enregistrée : "+(reqRelay.error||"serveur injoignable")+". Réessaie.","err");return;}
+ convoyRequests.push(reqItem);
+ saveRequests();
+ $("reqWood").value="";$("reqApples").value="";$("reqNote").value="";
+ renderRequests(true);notify("📨 Demande envoyée !");
+};
+
+$("reqList").addEventListener("input",e=>{
+ const t=e.target;if(!t.dataset.id)return;
+ (reqDrafts[t.dataset.id]=reqDrafts[t.dataset.id]||{})[t.dataset.f==="sender"?"sender":t.dataset.f]=t.value;
+});
+$("reqList").addEventListener("change",e=>{
+ const t=e.target;if(!t.dataset.id)return;
+ (reqDrafts[t.dataset.id]=reqDrafts[t.dataset.id]||{})[t.dataset.f==="sender"?"sender":t.dataset.f]=t.value;
+});
+
+$("reqList").addEventListener("click",async e=>{
+ const b=e.target.closest("button[data-act]");if(!b)return;
+ if(!requireAuth("modifier cette demande"))return;
+ const r=convoyRequests.find(x=>x.id===b.dataset.id);if(!r)return;
+ const act=b.dataset.act;
+ if(act==="del"){
+  const isAcceptedOrTreated=r.status==="done"||(Array.isArray(r.deliveries)&&r.deliveries.length>0);
+  const isOwner=!!currentUser&&(normalizeNameKey(r.player)===normalizeNameKey(currentUser)||normalizeNameKey(r.createdBy)===normalizeNameKey(currentUser));
+  if(!isOwner){notify("Tu ne peux supprimer que tes propres demandes.","err");return;}
+  if(isAcceptedOrTreated){notify("Suppression impossible : demande déjà traitée.","warn");return;}
+  openConfirm("Supprimer cette demande ?",async()=>{
+   await apiRelayAction("/api/requests",{action:"delete",id:r.id});
+   convoyRequests=convoyRequests.filter(x=>x.id!==r.id);delete reqDrafts[r.id];saveRequests();renderRequests(true);notify("🗑️ Demande supprimée.");
+  });
+  return;
+ }
+ if(act==="close"){
+  if(!canArchiveRequest(r)){notify("Archivage non autorisé pour cette demande.","err");return;}
+  openConfirm("Archiver cette demande sans la livrer en totalité ?",async()=>{
+   r.status="done";r.doneAt=Date.now();r.archivedBy=currentUser||"Inconnu";
+   await apiRelayAction("/api/requests",{action:"archive",id:r.id,doneAt:r.doneAt,archivedBy:r.archivedBy});
+   saveRequests();renderRequests(true);notify("📦 Demande archivée.");
+  });
+  return;
+ }
+ if(act==="send"){
+  const card=b.closest(".req-card");
+  const senderIdx=getIdentifiedPlayerIndex();
+  const a=senderIdx>=0?players[senderIdx]:null;
+  const dest=players[playerIndexByName(r.player)];
+  if(!a){notify("Utilisateur non reconnu dans la liste des joueurs.","err");return;}
+  if(!dest){notify("Joueur demandeur introuvable.","err");return;}
+  if(a===dest){notify("L'expéditeur et le demandeur doivent être différents.","warn");return;}
+  const rem=reqRemaining(r);
+  const read=f=>{const el=card.querySelector(`input[data-f="${f}"]`);const v=el?el.value.trim():"";return v===""?0:Number(v);};
+  const wood=rem.wood>0?read("wood"):0,apples=rem.apples>0?read("apples"):0;
+  if(!Number.isSafeInteger(wood)||!Number.isSafeInteger(apples)||wood<0||apples<0){notify("Les quantités doivent être des entiers positifs ou nuls.","warn");return;}
+  if(wood===0&&apples===0){notify("Indique une quantité à envoyer.","warn");return;}
+  if(wood>rem.wood||apples>rem.apples){notify("Quantité supérieure au reste à livrer.","warn");return;}
+  const m=await pushMovement("convoy",a,dest,null,wood,apples,true);
+  if(!m)return;
+  const delivery={by:a.name,loggedBy:currentUser||a.name,wood,apples,at:Date.now(),arrivalAt:m.arrivalAt,movementId:m.id};
+  r.deliveries.push(delivery);
+  const left=reqRemaining(r);
+  if(left.wood===0&&left.apples===0){r.status="done";r.doneAt=Date.now();}
+  await apiRelayAction("/api/requests",{action:"deliver",id:r.id,delivery,status:r.status,doneAt:r.doneAt||null});
+  delete reqDrafts[r.id];
+  saveRequests();renderRequests(true);
+  notify(`🚚 Convoi lancé : ${a.name} → ${dest.name} · dans ${formatTime(m.duration)}`+(r.status==="done"?" · archivée ✅":""));
+ }
+});
+
+document.querySelectorAll(".req-filter").forEach(b=>b.onclick=()=>{
+ reqFilter=b.dataset.f;
+ document.querySelectorAll(".req-filter").forEach(x=>x.classList.toggle("active",x===b));
+ renderRequests(true);
+});
+$("reqClear").onclick=()=>{
+ if(!isAdmin()){notify("Action réservée aux administrateurs.","err");return;}
+ openConfirm("Supprimer toutes les demandes archivées ?",async()=>{
+  await apiRelayAction("/api/requests",{action:"clear_done"});
+  convoyRequests=convoyRequests.filter(r=>r.status!=="done");saveRequests();renderRequests(true);
+  notify("🗑️ Archives supprimées.");
+ });
+};
+
+$("origin").addEventListener("change",e=>{selectedOrigin=Number(e.target.value);update();});
+$("destination").addEventListener("change",e=>{selectedDestination=Number(e.target.value);update();});
+$("moveOrigin").addEventListener("change",updateMoveEstimate);
+$("moveDestination").addEventListener("change",updateMoveEstimate);
+$("cvOrigin").addEventListener("change",updateMoveEstimate);
+$("cvDestination").addEventListener("change",updateMoveEstimate);
+
+function update(forceLists=false){
+ syncIdentifiedPlayerUI();
+ renderSelectors();
+ if(forceLists||$("tabPlayers")?.style.display!=="none")renderPlayerList();
+ if($("tabMap")?.style.display!=="none"){
+  updateResult();
+  refreshBounds();
+  renderMap();
+ }
+ renderMovements();
+ updateMoveEstimate();
+ renderRanking();
+ renderNext();
+ fillGo();
+ renderRequests();
+ refreshNextArrival();
+}
+
+// ===== Données partagées via le Worker (déplacements, chasses, attaques, demandes de convois) =====
+const SHARED_SYNC_URL=FOURMIZZZ_PROXY+"/api/sync";
+const SHARED_UPDATED_KEY="fourmizzz_shared_updated_at";
+const SHARED_BACKUP_KEY="fourmizzz_backup_before_shared";
+let sharedUpdatedAt=Number(localStorage.getItem(SHARED_UPDATED_KEY)||0)||0;
+let sharedPulling=false,sharedSeedTried=false,sharedLastOk=0,sharedError="";
+function renderSharedStatus(){
+ const el=$("sharedStatus");if(!el)return;
+ const hm=sharedLastOk?new Date(sharedLastOk).toLocaleTimeString("fr-FR",{hour:"2-digit",minute:"2-digit"}):"";
+ el.textContent=sharedError?`⚠️ Données partagées : ${sharedError}${hm?" · dernière synchro "+hm:""}`:(hm?`✓ Données partagées à ${hm}`:"");
+}
+
+function normalizeSharedMovement(m){
+ if(!m||typeof m!=="object"||m.id===undefined||m.id===null)return null;
+ const out={...m,id:String(m.id)};
+ const lookup=ref=>{
+  if(!ref||!ref.name)return null;
+  const key=normalizeNameKey(ref.name);
+  return players.find(p=>normalizeNameKey(p.name)===key)||null;
+ };
+ const fa=lookup(out.from),ta=lookup(out.to);
+ if(out.from)out.from={...out.from,x:fa?fa.x:(Number(out.from.x)||0),y:fa?fa.y:(Number(out.from.y)||0),va:fa?fa.va:(Number(out.from.va)||0)};
+ if(out.to)out.to={...out.to,x:ta?ta.x:(Number(out.to.x)||0),y:ta?ta.y:(Number(out.to.y)||0)};
+ if(out.from&&out.to&&(out.distance===undefined||out.distance===null))out.distance=distance(out.from,out.to);
+ if(!Number.isFinite(Number(out.duration)))out.duration=Math.max(1,Math.round((Number(out.arrivalAt)-Number(out.startAt||Date.now()))/1000));
+ return out;
+}
+
+async function pullShared(force){
+ if(sharedPulling||!authState.token||!isAuthenticated())return;
+ if(!force&&document.hidden)return;
+ sharedPulling=true;
+ try{
+  const res=await fetch(SHARED_SYNC_URL+(!force&&sharedUpdatedAt?"?since="+sharedUpdatedAt:""),{
+   method:"GET",cache:"no-store",headers:getAuthHeaders()
+  });
+  if(!res.ok){sharedError=res.status===401?"session expirée, reconnecte-toi":"serveur indisponible";renderSharedStatus();return;}
+  const data=await res.json().catch(()=>null);
+  if(!data||data.ok!==true){sharedError="réponse invalide";renderSharedStatus();return;}
+  sharedLastOk=Date.now();sharedError="";renderSharedStatus();
+  if(data.unchanged)return;
+  const serverMoves=Array.isArray(data.movements)?data.movements:[];
+  const serverReqs=Array.isArray(data.requests)?data.requests:[];
+
+  // Worker encore vide : on lui envoie une seule fois les données locales de cet appareil
+  if(!data.updatedAt&&!sharedSeedTried&&(movements.length||convoyRequests.length)){
+   sharedSeedTried=true;
+   const seed=await apiRelayAction("/api/state",{action:"seed",movements,requests:convoyRequests});
+   if(seed.ok)setTimeout(()=>pullShared(true),600);
+   return;
+  }
+
+  try{
+   if(!localStorage.getItem(SHARED_BACKUP_KEY)){
+    localStorage.setItem(SHARED_BACKUP_KEY,JSON.stringify({at:Date.now(),movements,convoyRequests}));
+   }
+  }catch(e){}
+
+  movements=serverMoves.map(normalizeSharedMovement).filter(Boolean);
+  convoyRequests=serverReqs.filter(r=>r&&r.id!==undefined).map(r=>({...r,deliveries:Array.isArray(r.deliveries)?r.deliveries:[]}));
+  sharedUpdatedAt=Number(data.updatedAt)||0;
+  safeSet(SHARED_UPDATED_KEY,String(sharedUpdatedAt));
+  saveMovements();saveRequests();
+  update(true);
+ }catch(e){
+  sharedError="connexion impossible";renderSharedStatus();
+ }finally{
+  sharedPulling=false;
+ }
+}
+
+renderAuthBar();
+clampPan();applyTransform();
+update(true);saveData();
+
+try{const t=localStorage.getItem("fourmizzz_active_tab");showTab(["main","convoy","map","rank"].includes(t)?t:"main");}catch(e){showTab("main");}
+window.scrollTo(0,0);
+checkWorkerSession().then(()=>pullShared(true));
+syncFourmizzz();
+setInterval(()=>syncFourmizzz(false),10*60*1000);
+setInterval(()=>pullShared(false),120*1000);
+
+announceArrivals(Date.now(),true);
+refreshNextArrival();
+setInterval(()=>{
+ if(document.hidden)return;
+ const now=Date.now();
+ updateNextCountdowns(now);
+ updateMovementCountdowns(now);
+ updateReqProgress(now);
+ if(now>=nextArrivalAt){
+  announceArrivals(now,false);
+  renderMovements();
+  if($("tabMap")?.style.display!=="none")renderMap();
+  renderNext();renderRequests();
+  refreshNextArrival();
+ }
+},1000);
+</script>
+</body>
+</html>
