@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Le Dôme De La Paix - Fourmizzz S5 (Ressources, Armee & Commerce)
 // @namespace    https://s5.fourmizzz.fr/
-// @version      0.5.43-worker
+// @version      0.5.44-worker
 // @updateURL    https://raw.githubusercontent.com/LDDLP/applizze-script/main/fourmizzz.user.js
 // @downloadURL  https://raw.githubusercontent.com/LDDLP/applizze-script/main/fourmizzz.user.js
 // @description  Outils d'alliance centralisés sur S5 : chasses en tête du Dôme avec TDC + chassé, attaques compactes avec filtres et tri, TDC attaquant/cible, règle 50%-300% / 20% max et convois.
@@ -20,7 +20,7 @@
   const HOST = window.location.hostname.toLowerCase();
   if (HOST !== "s5.fourmizzz.fr") return;
 
-  const SCRIPT_VERSION = "0.5.43-worker";
+  const SCRIPT_VERSION = "0.5.44-worker";
 
   const PATH = window.location.pathname.toLowerCase();
   const HREF = window.location.href.toLowerCase();
@@ -127,6 +127,9 @@
   let allianceAttackSort = "time";
   let selectedPlayerKey = "";
   let updateAvailableInfo = { available: false, remoteVersion: "" };
+
+  let lastLeftDockSig = "";
+  let lastRootSig = "";
 
   const DEFAULT_PLAYERS = [
     { name: "Peps", x: 80, y: 52, va: 0 },
@@ -1072,6 +1075,16 @@
     }
   }
 
+  // Optimisation 3 : purge centralisée des entrées expirées (attacks, hunts, movements)
+  function readCleanTimedArray(key, now = Date.now(), graceMs = 5000) {
+    const rawArr = readJsonArray(key);
+    const cleaned = rawArr.filter((item) => item && Number(item.arrivalAt || 0) > now - graceMs);
+    if (cleaned.length !== rawArr.length) {
+      writeJsonArray(key, cleaned);
+    }
+    return cleaned;
+  }
+
   function httpJsonRequest(method, url, bodyObj, token = "") {
     const headers = {
       "Content-Type": "application/json"
@@ -1313,7 +1326,7 @@
   function mergeRemoteHunts(remoteHunts) {
     const now = Date.now();
     const myNorm = normalizePseudo(getDevUser());
-    const localList = readJsonArray(STORAGE_KEYS.hunts).filter((h) => h && h.arrivalAt > now - 5000);
+    const localList = readCleanTimedArray(STORAGE_KEYS.hunts, now);
     const mineLocal = localList.filter((h) => normalizePseudo(h.player) === myNorm);
 
     const othersRemote = remoteHunts
@@ -1341,7 +1354,7 @@
   function mergeRemoteAttacks(remoteAttacks) {
     const now = Date.now();
     const myNorm = normalizePseudo(getDevUser());
-    const localList = readJsonArray(STORAGE_KEYS.attacks).filter((a) => a && a.arrivalAt > now - 5000);
+    const localList = readCleanTimedArray(STORAGE_KEYS.attacks, now);
     const mineLocal = localList.filter((a) => normalizePseudo(a.attacker) === myNorm);
 
     const othersRemote = remoteAttacks
@@ -1383,7 +1396,7 @@
 
   function mergeRemoteConvoys(remoteConvoys) {
     const now = Date.now();
-    const localList = readJsonArray(STORAGE_KEYS.movements).filter((m) => m && Number(m.arrivalAt) > now - 5000);
+    const localList = readCleanTimedArray(STORAGE_KEYS.movements, now);
     const byKey = new Map();
 
     for (const m of localList) {
@@ -1570,7 +1583,7 @@
   function extractHuntsFromPage() {
     const now = Date.now();
     const playerName = getDevUser();
-    const existingArrivals = readJsonArray(STORAGE_KEYS.hunts).map((h) => h && h.arrivalAt);
+    const existingArrivals = readCleanTimedArray(STORAGE_KEYS.hunts, now).map((h) => h && h.arrivalAt);
     const fullText = document.body ? document.body.innerText : "";
     const lines = fullText.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
 
@@ -1638,7 +1651,7 @@
     const currentScan = extractHuntsFromPage();
     const seenSigs = new Set(currentScan.map((h) => h.sig));
 
-    let stored = readJsonArray(STORAGE_KEYS.hunts).filter((h) => h && h.arrivalAt > now - 5000);
+    let stored = readCleanTimedArray(STORAGE_KEYS.hunts, now);
 
     stored = stored.filter((h) => {
       if (normalizePseudo(h.player) !== normPlayer) return true;
@@ -1825,14 +1838,14 @@
     const meNorm = normalizePseudo(getDevUser());
     if (!meNorm) return [];
 
-    return readJsonArray(STORAGE_KEYS.attacks)
+    return readCleanTimedArray(STORAGE_KEYS.attacks, now)
       .filter((a) => a && a.arrivalAt > now && normalizePseudo(a.target) === meNorm)
       .sort((a, b) => Number(a.arrivalAt || 0) - Number(b.arrivalAt || 0));
   }
 
   function getAllAllianceAttacks(now = Date.now()) {
     const seen = new Set();
-    return readJsonArray(STORAGE_KEYS.attacks)
+    return readCleanTimedArray(STORAGE_KEYS.attacks, now)
       .filter((a) => {
         if (!a || Number(a.arrivalAt || 0) <= now) return false;
         const k = String(a.sig || a.id);
@@ -1844,7 +1857,7 @@
   }
 
   function getAllActiveHunts(now = Date.now()) {
-    return readJsonArray(STORAGE_KEYS.hunts)
+    return readCleanTimedArray(STORAGE_KEYS.hunts, now)
       .filter((h) => h && Number(h.arrivalAt || 0) > now)
       .sort((a, b) => Number(a.arrivalAt || 0) - Number(b.arrivalAt || 0));
   }
@@ -1870,7 +1883,7 @@
     const meNorm = normalizePseudo(userName);
     if (!meNorm) return { incoming: [], outgoing: [] };
 
-    const activeMovements = readJsonArray(STORAGE_KEYS.movements).filter(
+    const activeMovements = readCleanTimedArray(STORAGE_KEYS.movements, now).filter(
       (m) => m && m.type === "convoy" && Number(m.arrivalAt || 0) > now
     );
 
@@ -1984,7 +1997,7 @@
   function extractAttacksFromArmeePage() {
     const now = Date.now();
     const attackerName = getDevUser();
-    const existingArrivals = readJsonArray(STORAGE_KEYS.attacks).map((a) => a && a.arrivalAt);
+    const existingArrivals = readCleanTimedArray(STORAGE_KEYS.attacks, now).map((a) => a && a.arrivalAt);
     const fullText = document.body ? document.body.innerText : "";
     const lines = fullText.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
 
@@ -2080,7 +2093,7 @@
     const currentScan = extractAttacksFromArmeePage();
     const seenSigs = new Set(currentScan.map((a) => a.sig));
 
-    let stored = readJsonArray(STORAGE_KEYS.attacks).filter((a) => a && a.arrivalAt > now - 5000);
+    let stored = readCleanTimedArray(STORAGE_KEYS.attacks, now);
 
     stored = stored.filter((a) => {
       if (normalizePseudo(a.attacker) !== normAttacker) return true;
@@ -2171,7 +2184,7 @@
   }
 
   function getOngoingDirectConvoys(now = Date.now()) {
-    const raw = readJsonArray(STORAGE_KEYS.movements).filter(
+    const raw = readCleanTimedArray(STORAGE_KEYS.movements, now).filter(
       (m) => m && m.type === "convoy" && Number(m.arrivalAt || 0) > now
     );
     const byKey = new Map();
@@ -2335,7 +2348,7 @@
     if (!IS_COMMERCE || !document.body) return [];
     const now = Date.now();
     const senderName = getDevUser();
-    const existingArrivals = readJsonArray(STORAGE_KEYS.movements)
+    const existingArrivals = readCleanTimedArray(STORAGE_KEYS.movements, now)
       .filter((m) => m && m.type === "convoy")
       .map((m) => m.arrivalAt);
 
@@ -2421,9 +2434,7 @@
       return;
     }
 
-    const movements = readJsonArray(STORAGE_KEYS.movements).filter(
-      (m) => m && Number(m.arrivalAt || 0) > now - 5000
-    );
+    const movements = readCleanTimedArray(STORAGE_KEYS.movements, now);
     const byKey = new Map(movements.map((m) => [convoyDedupeKey(m), m]));
     const newlyDetected = [];
 
@@ -3606,7 +3617,7 @@
     `;
   }
 
-  function renderGlobalBubble() {
+  function renderGlobalBubble(forceRender = false) {
     injectGlobalBubbleStyles();
     if (!ensureContainersAttached()) return;
 
@@ -3638,7 +3649,7 @@
       ? `Nouvelle version ${updateAvailableInfo.remoteVersion} disponible (actuelle : ${SCRIPT_VERSION})`
       : `Script à jour (${SCRIPT_VERSION})`;
 
-    leftDock.innerHTML = `
+    const leftDockHtml = `
       <a id="fmz-gb-discord-fab" class="fmz-gb-fab" href="${esc(SHORTCUT_LINKS.discordUrl)}" target="_blank" rel="noopener noreferrer" title="Ouvrir Discord">
         <span>💬 Discord</span>
       </a>
@@ -3652,6 +3663,65 @@
         <span>📊 Statistiques</span>
       </button>
     `;
+
+    // Optimisation 2 : signature incluant les calculs/états pour éviter les re-rendus inutiles
+    const sim = getTdcChains();
+    const simSig = Array.from(sim.attacks.entries())
+      .map(([k, v]) => `${k}:${v.willFail ? 1 : 0}:${v.taken || 0}:${v.ratioPct || 0}`)
+      .join(",") + "|" + Array.from(sim.hunts.entries())
+      .map(([k, v]) => `${k}:${v.before || 0}->${v.after || 0}`)
+      .join(",");
+
+    const rootSig = [
+      devUser,
+      locked ? 1 : 0,
+      accountDrawerOpen ? 1 : 0,
+      syncStatus.state,
+      syncStatus.label,
+      isDomeOpen ? 1 : 0,
+      isConvoyOpen ? 1 : 0,
+      isAllianceOpen ? 1 : 0,
+      isStatsOpen ? 1 : 0,
+      isPlayersOpen ? 1 : 0,
+      allianceAttackFilter,
+      allianceAttackSort,
+      selectedPlayerKey,
+      JSON.stringify(collapsedMap),
+      lastCommerceMessage,
+      IS_ATTACK_PAGE || IS_COMMERCE ? 1 : 0,
+      allHunts.map((h) => `${h.sig}:${h.area}:${Math.floor((h.arrivalAt - now) / 15000)}`).join(";"),
+      incomingAttacks.map((a) => `${a.sig}:${Math.floor((a.arrivalAt - now) / 15000)}`).join(";"),
+      allAllianceAttacks.map((a) => `${a.sig}:${a.ants}:${Math.floor((a.arrivalAt - now) / 15000)}`).join(";"),
+      convoys.incoming.map((c) => `${c.id}:${c.wood}:${c.apples}`).join(";"),
+      convoys.outgoing.map((c) => `${c.id}:${c.wood}:${c.apples}`).join(";"),
+      convoyRequests.map((r) => `${r.id}:${r.status}:${JSON.stringify(r.deliveries || [])}`).join(";"),
+      finishedHunts.map((h) => `${h.sig || h.id}:${h.area}`).join(";"),
+      simSig
+    ].join("##");
+
+    if (forceRender || leftDockSig !== lastLeftDockSig) {
+      leftDock.innerHTML = leftDockHtml;
+      lastLeftDockSig = leftDockSig;
+
+      const statsFab = leftDock.querySelector("#fmz-gb-stats-fab");
+      if (statsFab) {
+        statsFab.onclick = () => {
+          const next = !isStatsBubbleOpen();
+          setStatsBubbleOpen(next);
+          if (next) {
+            setPlayersBubbleOpen(false);
+            setGlobalBubbleOpen(false);
+            setConvoyBubbleOpen(false);
+            setAllianceBubbleOpen(false);
+          }
+          renderGlobalBubble(true);
+        };
+      }
+    }
+
+    if (!forceRender && rootSig === lastRootSig && root.innerHTML.trim() !== "") {
+      return;
+    }
 
     root.classList.toggle("has-armee-badge", IS_ATTACK_PAGE || IS_COMMERCE);
 
@@ -3906,21 +3976,7 @@
         </button>
       </div>
     `;
-
-    const statsFab = leftDock.querySelector("#fmz-gb-stats-fab");
-    if (statsFab) {
-      statsFab.onclick = () => {
-        const next = !isStatsBubbleOpen();
-        setStatsBubbleOpen(next);
-        if (next) {
-          setPlayersBubbleOpen(false);
-          setGlobalBubbleOpen(false);
-          setConvoyBubbleOpen(false);
-          setAllianceBubbleOpen(false);
-        }
-        renderGlobalBubble();
-      };
-    }
+    lastRootSig = rootSig;
 
     root.querySelector("#fmz-gb-players-fab").onclick = () => {
       const next = !isPlayersBubbleOpen();
@@ -3931,13 +3987,13 @@
         setAllianceBubbleOpen(false);
         setStatsBubbleOpen(false);
       }
-      renderGlobalBubble();
+      renderGlobalBubble(true);
     };
 
     root.querySelectorAll("[data-pl-select]").forEach((btn) => {
       btn.onclick = () => {
         selectedPlayerKey = btn.getAttribute("data-pl-select") || "";
-        renderGlobalBubble();
+        renderGlobalBubble(true);
       };
     });
 
@@ -3945,7 +4001,7 @@
     if (plBackBtn) {
       plBackBtn.onclick = () => {
         selectedPlayerKey = "";
-        renderGlobalBubble();
+        renderGlobalBubble(true);
       };
     }
 
@@ -3953,7 +4009,7 @@
     if (closePlayersBtn) {
       closePlayersBtn.onclick = () => {
         setPlayersBubbleOpen(false);
-        renderGlobalBubble();
+        renderGlobalBubble(true);
       };
     }
 
@@ -3966,7 +4022,7 @@
         setConvoyBubbleOpen(false);
         setStatsBubbleOpen(false);
       }
-      renderGlobalBubble();
+      renderGlobalBubble(true);
     };
 
     root.querySelector("#fmz-gb-fab").onclick = () => {
@@ -3978,7 +4034,7 @@
         setAllianceBubbleOpen(false);
         setStatsBubbleOpen(false);
       }
-      renderGlobalBubble();
+      renderGlobalBubble(true);
     };
 
     root.querySelector("#fmz-gb-convoy-fab").onclick = () => {
@@ -3990,20 +4046,20 @@
         setAllianceBubbleOpen(false);
         setStatsBubbleOpen(false);
       }
-      renderGlobalBubble();
+      renderGlobalBubble(true);
     };
 
     root.querySelectorAll("[data-al-filter]").forEach((btn) => {
       btn.onclick = () => {
         allianceAttackFilter = btn.getAttribute("data-al-filter") || "all";
-        renderGlobalBubble();
+        renderGlobalBubble(true);
       };
     });
 
     root.querySelectorAll("[data-al-sort]").forEach((btn) => {
       btn.onclick = () => {
         allianceAttackSort = btn.getAttribute("data-al-sort") || "time";
-        renderGlobalBubble();
+        renderGlobalBubble(true);
       };
     });
 
@@ -4011,7 +4067,7 @@
     if (closeStatsBtn) {
       closeStatsBtn.onclick = () => {
         setStatsBubbleOpen(false);
-        renderGlobalBubble();
+        renderGlobalBubble(true);
       };
     }
 
@@ -4019,7 +4075,7 @@
     if (closeAllianceBtn) {
       closeAllianceBtn.onclick = () => {
         setAllianceBubbleOpen(false);
-        renderGlobalBubble();
+        renderGlobalBubble(true);
       };
     }
 
@@ -4027,7 +4083,7 @@
     if (closeDomeBtn) {
       closeDomeBtn.onclick = () => {
         setGlobalBubbleOpen(false);
-        renderGlobalBubble();
+        renderGlobalBubble(true);
       };
     }
 
@@ -4035,7 +4091,7 @@
     if (closeConvoyBtn) {
       closeConvoyBtn.onclick = () => {
         setConvoyBubbleOpen(false);
-        renderGlobalBubble();
+        renderGlobalBubble(true);
       };
     }
 
@@ -4043,7 +4099,7 @@
     if (refreshBtn) {
       refreshBtn.onclick = async () => {
         setSyncState("syncing", "Synchro…");
-        renderGlobalBubble();
+        renderGlobalBubble(true);
         checkScriptUpdate(true);
         await pullFromWorker(true);
         runPageCycle();
@@ -4055,7 +4111,7 @@
       accBtn.onclick = () => {
         if (isSessionLocked()) return;
         accountDrawerOpen = !accountDrawerOpen;
-        renderGlobalBubble();
+        renderGlobalBubble(true);
       };
     }
 
@@ -4071,7 +4127,7 @@
         runPageCycle();
         pullFromWorker(true).then((changed) => {
           if (changed) runPageCycle();
-          else renderGlobalBubble();
+          else renderGlobalBubble(true);
         });
       };
       savePseudoBtn.onclick = submitPseudo;
@@ -4097,7 +4153,7 @@
         const key = hdr.getAttribute("data-toggle-sec");
         if (key) {
           toggleSectionCollapsed(key);
-          renderGlobalBubble();
+          renderGlobalBubble(true);
         }
       };
     });
@@ -4128,6 +4184,8 @@
         !document.getElementById("fmz-gb-root") ||
         ((IS_ATTACK_PAGE || IS_COMMERCE) && !document.getElementById("fmz-armee-badge-wrap"))
       ) {
+        lastLeftDockSig = "";
+        lastRootSig = "";
         runPageCycle();
       }
     });
@@ -4181,7 +4239,9 @@
     runPageCycle();
   }, 5000);
 
+  // Optimisation 1 : éviter les appels réseau si l'onglet est caché et synchroniser au retour
   setInterval(() => {
+    if (document.hidden) return;
     const active = document.activeElement;
     if (active && active.closest && active.closest("#fmz-gb-root")) return;
     checkScriptUpdate(false);
@@ -4191,12 +4251,24 @@
     });
   }, 15000);
 
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) {
+      runPageCycle();
+      pullFromWorker(false).then((changed) => {
+        if (changed) runPageCycle();
+        else renderGlobalBubble();
+      });
+    }
+  });
+
   document.addEventListener("submit", () => {
     setTimeout(() => runPageCycle(), 150);
     setTimeout(() => runPageCycle(), 600);
   }, true);
 
   window.addEventListener("pageshow", () => {
+    lastLeftDockSig = "";
+    lastRootSig = "";
     runPageCycle();
   });
 
