@@ -2063,8 +2063,6 @@
       if (statsPayload) {
         syncWithWorker({ kind: "stats", alliance: OWN_ALLIANCE_TAG, stats: statsPayload }, "lddlp_stats");
       }
-      showImportedToast(`TDC ${OWN_ALLIANCE_TAG} importés (${count})`);
-      triggerCardImportFlash();
     }
     return count;
   }
@@ -2156,10 +2154,7 @@
       const prevSig = JSON.stringify(prevProf.buildings || {});
       updatePlayerProfile(getDevUser(), { buildings }, true);
       const nextProf = getPlayerProfile(getDevUser());
-      if (prevSig !== JSON.stringify(nextProf.buildings || {})) {
-        showImportedToast("Bâtiments importés");
-        triggerCardImportFlash();
-      }
+      // Import silencieux : aucune notification ni animation verte.
     }
     return count;
   }
@@ -2208,10 +2203,7 @@
       }
       updatePlayerProfile(getDevUser(), patch, true);
       const nextProf = getPlayerProfile(getDevUser());
-      if (prevSig !== JSON.stringify(nextProf.lab || {})) {
-        showImportedToast("Laboratoire importé");
-        triggerCardImportFlash();
-      }
+      // Import silencieux : aucune notification ni animation verte.
     }
     return count;
   }
@@ -2755,8 +2747,6 @@
     const snapshotKey = currentScan.map((a) => a.sig).sort().join("||");
     if (currentScan.length > 0 && (addedOrUpdatedCount > 0 || snapshotKey !== lastArmeeSnapshotKey)) {
       lastArmeeSnapshotKey = snapshotKey;
-      showArmeeImportedBubble("Attaques importées");
-      triggerCardImportFlash();
     } else if (currentScan.length === 0) {
       lastArmeeSnapshotKey = "";
     }
@@ -3281,8 +3271,6 @@
     const snapshotKey = detected.map((c) => convoyDedupeKey(c)).sort().join("||");
     if (newlyDetected.length > 0 || snapshotKey !== lastCommerceSnapshotKey) {
       lastCommerceSnapshotKey = snapshotKey;
-      showArmeeImportedBubble("Convois importés");
-      triggerCardImportFlash();
     }
   }
 
@@ -5028,7 +5016,7 @@
               }
               if (tdcInfo.hasTdc) {
                 const defAfter = !willFail && tdcInfo.taken > 0 ? tdcInfo.afterTdc : tdcInfo.beforeTdc;
-                const defDelta = !willFail && tdcInfo.taken > 0 ? -defTdc.taken : 0;
+                const defDelta = !willFail && tdcInfo.taken > 0 ? -tdcInfo.taken : 0;
                 badges.push(formatTdcChangeBadge(defClean, tdcInfo.beforeTdc, defAfter, defDelta));
               }
               return `
