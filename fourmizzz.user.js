@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Le Dôme De La Paix - Fourmizzz S5 (Ressources, Armee, Commerce & Alliance)
 // @namespace    https://s5.fourmizzz.fr/
-// @version      0.5.71-worker
+// @version      0.5.72-worker
 // @updateURL    https://raw.githubusercontent.com/LDDLP/applizze-script/main/fourmizzz.user.js
 // @downloadURL  https://raw.githubusercontent.com/LDDLP/applizze-script/main/fourmizzz.user.js
 // @description  Outils d'alliance centralisés sur S5 : chasses en tête du Dôme avec TDC + chassé, attaques compactes avec filtres et tri, TDC attaquant/cible en rouge/vert, règle 50%-300% / 20% max, convois, fiche joueur dédiée et import auto construction/laboratoire.
@@ -22,7 +22,7 @@
   const HOST = window.location.hostname.toLowerCase();
   if (HOST !== "s5.fourmizzz.fr") return;
 
-  const SCRIPT_VERSION = "0.5.71-worker";
+  const SCRIPT_VERSION = "0.5.72-worker";
 
   const PATH = window.location.pathname.toLowerCase();
   const HREF = window.location.href.toLowerCase();
@@ -780,7 +780,7 @@
     return 0;
   }
 
-  function simulateTimeline(nowMs = Date.now(), extraHunts = []) {
+  function simulateTimeline(nowMs = Date.now(), extraHunts = [], untilMs = Infinity) {
     const running = new Map();
     const getRun = (pseudo) => {
       const k = normalizePseudo(pseudo);
@@ -803,12 +803,14 @@
       events.push({ kind: "hunt", at: Number(h.arrivalAt || 0), item: h });
     });
 
-    events.sort((x, y) => x.at - y.at);
+    // Ne simule que les mouvements qui seront arrivés au plus tard à l'instant demandé.
+    const eligibleEvents = events.filter((ev) => Number.isFinite(ev.at) && ev.at <= untilMs);
+    eligibleEvents.sort((x, y) => x.at - y.at);
 
     const attacks = new Map();
     const hunts = new Map();
 
-    for (const ev of events) {
+    for (const ev of eligibleEvents) {
       if (ev.kind === "attack") {
         const a = ev.item;
         const ants = Math.max(0, getAttackSentAnts(a));
@@ -996,6 +998,27 @@
     return fb && typeof fb.va === "number" && fb.va > 0 ? fb.va : null;
   }
 
+  function getPlayerCoordinates(pseudo) {
+    const norm = normalizePseudo(pseudo);
+    if (!norm) return null;
+    const player = DEFAULT_PLAYERS.find((p) => normalizePseudo(p.name) === norm);
+    if (!player || !Number.isFinite(Number(player.x)) || !Number.isFinite(Number(player.y))) return null;
+    return { x: Number(player.x), y: Number(player.y) };
+  }
+
+  function estimateAttackTravelSeconds(attackerPseudo, targetPseudo, attackerVa) {
+    const from = getPlayerCoordinates(attackerPseudo);
+    const to = getPlayerCoordinates(targetPseudo);
+    const va = Number(attackerVa);
+    if (!from || !to || !Number.isFinite(va) || va < 0) return null;
+    const dx = from.x - to.x;
+    const dy = from.y - to.y;
+    const distance = Math.sqrt(dx * dx + dy * dy);
+    // Formule communautaire Fourmizzz : durée en jours convertie en secondes.
+    const seconds = (1 - Math.exp(-distance / 350)) * 7.375 * Math.pow(0.9, va) * 86400;
+    return Number.isFinite(seconds) && seconds >= 0 ? { distance, seconds: Math.max(1, Math.round(seconds)) } : null;
+  }
+
   function evaluateTargetAttackability(targetPseudo, attackerPseudo = getDevUser(), nowMs = Date.now()) {
     const targetNorm = normalizePseudo(targetPseudo);
     const attackerNorm = normalizePseudo(attackerPseudo);
@@ -1015,6 +1038,17 @@
 
     const targetVa = getPlayerAttackSpeed(targetPseudo);
     const attackerVa = getPlayerAttackSpeed(attackerPseudo);
+    const travel = estimateAttackTravelSeconds(attackerPseudo, targetPseudo, attackerVa);
+    const arrivalAt = travel ? nowMs + travel.seconds * 1000 : null;
+    const arrivalSim = arrivalAt ? simulateTimeline(nowMs, [], arrivalAt) : null;
+    const arrivalTargetTdc = arrivalSim && arrivalSim.finalTdc.has(targetNorm)
+      ? arrivalSim.finalTdc.get(targetNorm) : baseTargetTdc;
+    const arrivalAttackerTdc = arrivalSim && arrivalSim.finalTdc.has(attackerNorm)
+      ? arrivalSim.finalTdc.get(attackerNorm) : baseAttackerTdc;
+    const arrivalRatioPct = arrivalTargetTdc > 0 && arrivalAttackerTdc > 0
+      ? Math.round((arrivalTargetTdc / arrivalAttackerTdc) * 100) : null;
+    const arrivalAttackable = arrivalRatioPct == null ? null
+      : arrivalTargetTdc >= arrivalAttackerTdc * 0.5 && arrivalTargetTdc <= arrivalAttackerTdc * 3;
 
     if (!projTargetTdc || projTargetTdc <= 0 || !projAttackerTdc || projAttackerTdc <= 0) {
       return {
@@ -1026,6 +1060,14 @@
         projAttackerTdc,
         targetVa,
         attackerVa,
+        distance: travel ? travel.distance : null,
+        travelSec: travel ? travel.seconds : null,
+        arrivalAt,
+        arrivalAttackable,
+        arrivalRatioPct,
+        arrivalTargetTdc,
+        arrivalAttackerTdc,
+        arrivalReason: !travel ? "Coordonnées ou VA manquantes" : (arrivalRatioPct == null ? "TDC inconnu à l'arrivée" : `${arrivalRatioPct}% à l'arrivée`),
         reason: "TDC manquant pour évaluer 50%–300%"
       };
     }
@@ -1058,6 +1100,14 @@
       projAttackerTdc,
       targetVa,
       attackerVa,
+      distance: travel ? travel.distance : null,
+      travelSec: travel ? travel.seconds : null,
+      arrivalAt,
+      arrivalAttackable,
+      arrivalRatioPct,
+      arrivalTargetTdc,
+      arrivalAttackerTdc,
+      arrivalReason: !travel ? "Coordonnées ou VA manquantes" : (arrivalRatioPct == null ? "TDC inconnu à l'arrivée" : `${arrivalRatioPct}% à l'arrivée`),
       reason
     };
   }
@@ -4142,6 +4192,8 @@
               const dotTxt = isMe
                 ? "MOI"
                 : (ev.attackable === true ? "OK" : (ev.attackable === false ? "NON" : "?"));
+              const arrivalDotClass = ev.arrivalAttackable === true ? "ok" : (ev.arrivalAttackable === false ? "no" : "na");
+              const arrivalDotTxt = isMe ? "MOI" : (ev.arrivalAttackable === true ? "ARR. OK" : (ev.arrivalAttackable === false ? "ARR. NON" : "ARR. ?"));
               const tdcTxt = p.tdc ? `${formatNumber(p.tdc)} cm²` : "TDC ?";
               const metaBits = [];
               if (p.count > 0) metaBits.push(`⚔️${p.count}`);
@@ -4157,6 +4209,7 @@
                   </span>
                   <span style="display:flex;align-items:center;gap:5px">
                     <span class="fmz-gb-atk-dot ${dotClass}" title="${esc(ev.reason || "")}">${esc(dotTxt)}</span>
+                    ${isMe ? "" : `<span class="fmz-gb-atk-dot ${arrivalDotClass}" title="${esc(ev.arrivalReason || "")}${ev.travelSec != null ? ` · trajet ${formatDuration(ev.travelSec)}` : ""}">${arrivalDotTxt}</span>`}
                     ${rightMeta}
                   </span>
                 </button>
@@ -4180,7 +4233,7 @@
           </div>
 
           <div class="fmz-gb-summary">
-            Règle <b>50%–300%</b> vs <b>${esc(devUser)}</b> : <span class="fmz-gb-atk-dot ok">OK</span> attaquable · <span class="fmz-gb-atk-dot no">NON</span> hors plage · <span class="fmz-gb-atk-dot na">?</span> TDC inconnu
+            Règle <b>50%–300%</b> vs <b>${esc(devUser)}</b> : voyant 1 = situation actuelle · voyant 2 = situation estimée à l’arrivée (VA + distance + mouvements connus).
           </div>
 
           <div>${listHtml}</div>
@@ -4213,6 +4266,12 @@
       const attackStatusBadge = isMe
         ? `<span class="fmz-gb-atk-dot na">MOI</span>`
         : `<span class="fmz-gb-atk-dot ${dotClass}">${dotText}</span>`;
+      const arrivalDotClass = atkEval.arrivalAttackable === true ? "ok" : (atkEval.arrivalAttackable === false ? "no" : "na");
+      const arrivalDotText = atkEval.arrivalAttackable === true ? "ATTAQUABLE À L'ARRIVÉE" : (atkEval.arrivalAttackable === false ? "NON ATTAQUABLE À L'ARRIVÉE" : "ARRIVÉE INCONNUE");
+      const arrivalStatusBadge = isMe ? "" : `<span class="fmz-gb-atk-dot ${arrivalDotClass}" title="${esc(atkEval.arrivalReason || "")}">${arrivalDotText}</span>`;
+      const arrivalInfoHtml = !isMe
+        ? `<div style="margin-top:5px">🚀 Trajet estimé : <b>${atkEval.travelSec != null ? formatDuration(atkEval.travelSec) : "indisponible"}</b>${atkEval.distance != null ? ` · Distance : <b>${atkEval.distance.toFixed(2)}</b>` : ""}${atkEval.arrivalAt ? ` · Arrivée : <b>${new Date(atkEval.arrivalAt).toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" })}</b>` : ""}<br>📊 TDC estimés à l'arrivée : <b>${atkEval.arrivalTargetTdc != null ? formatNumber(atkEval.arrivalTargetTdc) : "?"}</b> vs <b>${atkEval.arrivalAttackerTdc != null ? formatNumber(atkEval.arrivalAttackerTdc) : "?"}</b> cm² (${atkEval.arrivalRatioPct != null ? `${atkEval.arrivalRatioPct}%` : "ratio inconnu"})</div>`
+        : "";
 
       const tdcBadgeHtml = currentTdc
         ? formatTdcChangeBadge(
@@ -4227,9 +4286,10 @@
         <div class="fmz-gb-summary">
           <div style="display:flex;justify-content:space-between;align-items:center;gap:6px;margin-bottom:6px">
             <b>🎯 Règle 50%–300% (vs ${esc(devUser)})</b>
-            ${attackStatusBadge}
+            <div style="display:flex;flex-wrap:wrap;gap:5px;justify-content:flex-end">${attackStatusBadge}${arrivalStatusBadge}</div>
           </div>
           <div>${esc(atkEval.reason)}</div>
+          ${arrivalInfoHtml}
           <div class="fmz-gb-tdc-line">${tdcBadgeHtml}</div>
           <div style="margin-top:6px">
             ⚡ Vitesse d'attaque (VA) : <b>${vaVal != null ? `niveau ${esc(vaVal)}` : "non renseignée"}</b><br>
