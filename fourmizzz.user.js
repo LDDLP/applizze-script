@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Le Dôme De La Paix - Fourmizzz S5 (Ressources, Armee, Commerce & Alliance)
 // @namespace    https://s5.fourmizzz.fr/
-// @version      0.5.64-worker
+// @version      0.5.65-worker
 // @updateURL    https://raw.githubusercontent.com/LDDLP/applizze-script/main/fourmizzz.user.js
 // @downloadURL  https://raw.githubusercontent.com/LDDLP/applizze-script/main/fourmizzz.user.js
 // @description  Outils d'alliance centralisés sur S5 : chasses en tête du Dôme avec TDC + chassé, attaques compactes avec filtres et tri, TDC attaquant/cible en rouge/vert, règle 50%-300% / 20% max, convois, fiche joueur dédiée et import auto construction/laboratoire.
@@ -22,7 +22,7 @@
   const HOST = window.location.hostname.toLowerCase();
   if (HOST !== "s5.fourmizzz.fr") return;
 
-  const SCRIPT_VERSION = "0.5.64-worker";
+  const SCRIPT_VERSION = "0.5.65-worker";
 
   const PATH = window.location.pathname.toLowerCase();
   const HREF = window.location.href.toLowerCase();
@@ -383,14 +383,14 @@
   function readPageTextWithoutOwnUi() {
     const hidden = [];
     document.querySelectorAll("#fmz-gb-root, #fmz-gb-left-dock").forEach((el) => {
-      hidden.push([el, el.style.display]);
-      el.style.display = "none";
+      hidden.push([el, el.style.visibility]);
+      el.style.visibility = "hidden";
     });
     try {
       return document.body ? document.body.innerText || "" : "";
     } finally {
-      hidden.forEach(([el, d]) => {
-        el.style.display = d;
+      hidden.forEach(([el, v]) => {
+        el.style.visibility = v;
       });
     }
   }
@@ -430,6 +430,31 @@
       lab: {},
       updatedAt: 0
     };
+
+    const sameLevels = (a, b) => {
+      const ka = Object.keys(a || {});
+      const kb = Object.keys(b || {});
+      return ka.length === kb.length && ka.every((k) => b[k] &&
+        Number(a[k].level) === Number(b[k].level) &&
+        (a[k].targetLevel ?? null) === (b[k].targetLevel ?? null));
+    };
+    const nextBuildings = cleanLevelMap(
+      { ...(prev.buildings || {}), ...((patch && patch.buildings) || {}) },
+      BUILDING_NAMES
+    );
+    const nextLab = cleanLevelMap({ ...(prev.lab || {}), ...((patch && patch.lab) || {}) }, LAB_NAMES);
+    const nextVa =
+      patch && patch.attackSpeed !== undefined
+        ? (patch.attackSpeed != null && Number.isFinite(Number(patch.attackSpeed)) ? Number(patch.attackSpeed) : null)
+        : prev.attackSpeed;
+    if (
+      map[norm] &&
+      sameLevels(prev.buildings, nextBuildings) &&
+      sameLevels(prev.lab, nextLab) &&
+      (prev.attackSpeed ?? null) === (nextVa ?? null)
+    ) {
+      return prev;
+    }
 
     const next = {
       ...prev,
@@ -3240,10 +3265,16 @@
       }
       #fmz-gb-card.fmz-player-page{
         position:fixed;
-        inset:12px;
+        top:64px;left:12px;right:12px;bottom:auto;
         width:auto;
         max-width:none;
-        max-height:none;
+        height:auto;
+        max-height:calc(100vh - 76px);
+        max-height:calc(100dvh - 76px);
+        overflow-y:auto;
+        overscroll-behavior:contain;
+        -webkit-overflow-scrolling:touch;
+        animation:none;
         margin:0 !important;
         z-index:10020;
         border-radius:16px;
