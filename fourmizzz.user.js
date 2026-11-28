@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Le Dôme De La Paix - Fourmizzz S5 (Ressources, Armee, Commerce & Alliance)
 // @namespace    https://s5.fourmizzz.fr/
-// @version      0.5.62-worker
+// @version      0.5.63-worker
 // @updateURL    https://raw.githubusercontent.com/LDDLP/applizze-script/main/fourmizzz.user.js
 // @downloadURL  https://raw.githubusercontent.com/LDDLP/applizze-script/main/fourmizzz.user.js
 // @description  Outils d'alliance centralisés sur S5 : chasses en tête du Dôme avec TDC + chassé, attaques compactes avec filtres et tri, TDC attaquant/cible en rouge/vert, règle 50%-300% / 20% max, convois, fiche joueur dédiée et import auto construction/laboratoire.
@@ -22,7 +22,7 @@
   const HOST = window.location.hostname.toLowerCase();
   if (HOST !== "s5.fourmizzz.fr") return;
 
-  const SCRIPT_VERSION = "0.5.62-worker";
+  const SCRIPT_VERSION = "0.5.63-worker";
 
   const PATH = window.location.pathname.toLowerCase();
   const HREF = window.location.href.toLowerCase();
@@ -43,7 +43,7 @@
     discordUrl: "https://discord.com/app",
     siteUrl: "https://applizzz.pages.dev/",
     membersUrl: "https://s5.fourmizzz.fr/alliance.php?Membres",
-    scriptUpdateUrl: "https://raw.githubusercontent.com/LDDLP/applizze-script/main/fourmizzz_user.js"
+    scriptUpdateUrl: "https://raw.githubusercontent.com/LDDLP/applizze-script/main/fourmizzz.user.js"
   };
 
   const STORAGE_KEYS = {
@@ -131,15 +131,51 @@
 
   const LDDLP_KEYS = new Set(DEFAULT_PLAYERS.map((p) => normalizePseudo(p.name)));
 
+  function getKnownAllianceKeys() {
+    const keys = new Set(LDDLP_KEYS);
+    try {
+      const tdcRaw = JSON.parse(localStorage.getItem(STORAGE_KEYS.allianceTdc) || "{}");
+      if (tdcRaw && typeof tdcRaw === "object") {
+        for (const [k, v] of Object.entries(tdcRaw)) {
+          if (!k || k.startsWith("_")) continue;
+          const n = normalizePseudo((v && v.pseudo) || k);
+          if (n) keys.add(n);
+        }
+      }
+    } catch (e) {}
+    try {
+      const stRaw = JSON.parse(localStorage.getItem(STORAGE_KEYS.allianceStats) || "null");
+      const top = stRaw && (stRaw.topPlayers || stRaw.ranking || stRaw.items);
+      if (Array.isArray(top)) {
+        for (const item of top) {
+          const n = normalizePseudo(item && (item.name || item.pseudo || item.player));
+          if (n) keys.add(n);
+        }
+      }
+    } catch (e) {}
+    return keys;
+  }
+
+  function registerAllianceMemberPseudo(rawName) {
+    const clean = playerDisplayName(rawName);
+    if (!isCleanPlayerName(clean)) return false;
+    const norm = normalizePseudo(clean);
+    if (!norm) return false;
+    LDDLP_KEYS.add(norm);
+    return true;
+  }
+
   const TAB_ID = Math.random().toString(36).slice(2);
   const LEADER_KEY = "fmz_sync_leader_v1";
   const LEADER_TTL_MS = 40 * 1000;
 
-  function claimSyncLeader() {
+  function claimSyncLeader(forceTakeover = false) {
     try {
       const now = Date.now();
       const cur = JSON.parse(localStorage.getItem(LEADER_KEY) || "null");
-      if (cur && cur.id !== TAB_ID && now - Number(cur.at) < LEADER_TTL_MS) return false;
+      if (!forceTakeover && cur && cur.id !== TAB_ID && now - Number(cur.at) < LEADER_TTL_MS) {
+        return false;
+      }
       localStorage.setItem(LEADER_KEY, JSON.stringify({ id: TAB_ID, at: now }));
       const check = JSON.parse(localStorage.getItem(LEADER_KEY) || "null");
       return !!check && check.id === TAB_ID;
@@ -356,7 +392,7 @@
     map[norm] = next;
     writePlayerProfilesMap(map);
 
-    if (syncRemote && LDDLP_KEYS.has(norm)) {
+    if (syncRemote && getKnownAllianceKeys().has(norm)) {
       syncWithWorker(
         {
           kind: "players",
@@ -385,7 +421,9 @@
     for (const p of remotePlayers) {
       if (!p || typeof p !== "object") continue;
       const name = String(p.name || p.pseudo || p.player || "").trim();
-      if (!isCleanPlayerName(name) || !isKnownAllianceMemberName(name)) continue;
+      if (!isCleanPlayerName(name)) continue;
+      registerAllianceMemberPseudo(name);
+      if (!isKnownAllianceMemberName(name)) continue;
       const norm = normalizePseudo(name);
       const map = readPlayerProfilesMap();
       const prev = map[norm] || {};
@@ -452,12 +490,13 @@
   }
 
   function computeAndStoreAllianceStatsFromMap(mapObj, now = Date.now()) {
+    const knownKeys = getKnownAllianceKeys();
     const list = Object.entries(mapObj || {})
       .filter(
         ([k, v]) =>
           k &&
           !k.startsWith("_") &&
-          LDDLP_KEYS.has(normalizePseudo(k)) &&
+          knownKeys.has(normalizePseudo((v && v.pseudo) || k)) &&
           v &&
           typeof v.tdc === "number" &&
           v.tdc > 0
@@ -486,6 +525,11 @@
 
   function ingestRemoteStats(rawStats) {
     if (!rawStats || typeof rawStats !== "object") return;
+    if (Array.isArray(rawStats.topPlayers)) {
+      rawStats.topPlayers.forEach((p) => {
+        if (p) registerAllianceMemberPseudo(p.name || p.pseudo || p.player);
+      });
+    }
     const filteredTop = Array.isArray(rawStats.topPlayers)
       ? rawStats.topPlayers.filter((p) => p && isKnownAllianceMemberName(p.name || p.pseudo || p.player))
       : undefined;
@@ -500,7 +544,7 @@
   function isKnownAllianceMemberName(pseudo) {
     const norm = normalizePseudo(pseudo);
     if (!norm) return false;
-    return LDDLP_KEYS.has(norm);
+    return getKnownAllianceKeys().has(norm);
   }
 
   function cleanAllianceTdcMap() {
@@ -541,7 +585,9 @@
     for (const p of remotePlayers) {
       if (!p || typeof p !== "object") continue;
       const name = String(p.name || p.pseudo || p.player || "").trim();
-      if (!isCleanPlayerName(name) || !isKnownAllianceMemberName(name)) continue;
+      if (!isCleanPlayerName(name)) continue;
+      registerAllianceMemberPseudo(name);
+      if (!isKnownAllianceMemberName(name)) continue;
       const norm = normalizePseudo(name);
       const rawTdc = p.tdc ?? p.terrain ?? p.area ?? 0;
       const num = parseLeadingFrNumber(rawTdc);
@@ -568,7 +614,7 @@
 
   function getPlayerTdc(pseudo) {
     const norm = normalizePseudo(pseudo);
-    if (!norm || !LDDLP_KEYS.has(norm)) return null;
+    if (!norm || !getKnownAllianceKeys().has(norm)) return null;
     const map = readAllianceTdcMap();
     const entry = map[norm];
     if (entry && typeof entry.tdc === "number" && entry.tdc > 0) {
@@ -1594,13 +1640,13 @@
       setSyncState("error", "URL manquante");
       return false;
     }
-    if (!claimSyncLeader()) return false;
+    if (force) {
+      nextRetryAt = 0;
+    }
+    if (!claimSyncLeader(force)) return false;
     if (!force && Date.now() < nextRetryAt) {
       setSyncState("backoff", "Pause synchro");
       return false;
-    }
-    if (force) {
-      nextRetryAt = 0;
     }
 
     setSyncState("syncing", "Synchro…");
@@ -1736,7 +1782,8 @@
         const tdcVal = parseLeadingFrNumber(rawTerrain);
         if (!norm || !Number.isFinite(tdcVal) || tdcVal <= 0) continue;
 
-        if (!isKnownAllianceMemberName(rawPseudo)) continue;
+        if (!isCleanPlayerName(rawPseudo)) continue;
+        registerAllianceMemberPseudo(rawPseudo);
 
         map[norm] = {
           pseudo: rawPseudo,
@@ -1754,8 +1801,9 @@
       writeAllianceTdcMap(map);
       const statsPayload = computeAndStoreAllianceStatsFromMap(map, now);
       const profilesMap = readPlayerProfilesMap();
+      const knownKeys = getKnownAllianceKeys();
       const playersList = Object.entries(map)
-        .filter(([k, v]) => k && !k.startsWith("_") && LDDLP_KEYS.has(k) && v && v.tdc > 0)
+        .filter(([k, v]) => k && !k.startsWith("_") && knownKeys.has(k) && v && v.tdc > 0)
         .map(([k, v]) => {
           const prof = profilesMap[k] || {};
           return {
@@ -2145,7 +2193,6 @@
       .filter((h) => h && Number(h.arrivalAt || 0) > now)
       .sort((a, b) => Number(a.arrivalAt || 0) - Number(b.arrivalAt || 0));
   }
-
   let convoyRequests = readJsonArray(STORAGE_KEYS.convoyRequests);
   convoyRequests.forEach((r) => {
     if (!Array.isArray(r.deliveries)) r.deliveries = [];
@@ -2295,10 +2342,7 @@
       } else if (current) {
         if (/^(?:troupes\s+en\s+attaques?\s*:|arriv[ée]e?\s+(?:demain\s+)?à\s+)/i.test(line)) {
           current.push(line);
-        } else if (
-          /^-?\s*vous\s+(?:allez|chassez|convoquez)/i.test(line) ||
-          (/^[A-ZÉÈÊÀÂÎÔÛ].{0,40}$/.test(line) && !line.includes(":"))
-        ) {
+        } else if (/^-?\s*vous\s+(?:allez|chassez|convoquez)/i.test(line)) {
           blocks.push(current);
           current = null;
         }
@@ -3384,7 +3428,9 @@
       for (const item of rawList) {
         if (!item || typeof item !== "object") continue;
         const pName = playerDisplayName(String(item.name || item.pseudo || item.player || "").trim());
-        if (!isCleanPlayerName(pName) || !isKnownAllianceMemberName(pName)) continue;
+        if (!isCleanPlayerName(pName)) continue;
+        registerAllianceMemberPseudo(pName);
+        if (!isKnownAllianceMemberName(pName)) continue;
         const pVal = item.tdc ?? item.terrain ?? item.value ?? item.score ?? 0;
         const numVal = parseLeadingFrNumber(pVal);
         if (numVal !== null && numVal > 0) {
@@ -3407,12 +3453,13 @@
   function buildStatsBubbleHtml(devUser, now, collapsedMap) {
     const stats = readAllianceStats();
     const tdcMap = readAllianceTdcMap();
+    const knownKeys = getKnownAllianceKeys();
     const playersFromMap = Object.entries(tdcMap)
       .filter(
         ([k, v]) =>
           k &&
           !k.startsWith("_") &&
-          LDDLP_KEYS.has(normalizePseudo(k)) &&
+          knownKeys.has(normalizePseudo((v && v.pseudo) || k)) &&
           v &&
           typeof v.tdc === "number" &&
           v.tdc > 0 &&
@@ -3902,11 +3949,12 @@
   function getKnownPlayers(now) {
     const byKey = new Map();
     const tdcMap = readAllianceTdcMap();
+    const knownKeys = getKnownAllianceKeys();
 
     for (const p of DEFAULT_PLAYERS) {
       const display = playerDisplayName(p.name);
       const key = normalizePseudo(display);
-      if (!key || !display || !LDDLP_KEYS.has(key)) continue;
+      if (!key || !display || !knownKeys.has(key)) continue;
       const storedEntry = tdcMap[key];
       const tdcVal =
         storedEntry && typeof storedEntry.tdc === "number" && storedEntry.tdc > 0
@@ -3921,6 +3969,26 @@
         hunts: 0,
         attackEval: atkEval
       });
+    }
+
+    for (const [k, v] of Object.entries(tdcMap || {})) {
+      if (!k || k.startsWith("_") || !v || typeof v !== "object") continue;
+      const display = playerDisplayName(v.pseudo || k);
+      const key = normalizePseudo(display);
+      if (!key || !display || !isCleanPlayerName(display) || !knownKeys.has(key)) continue;
+      const tdcVal = typeof v.tdc === "number" && v.tdc > 0 ? Math.floor(v.tdc) : null;
+      if (!byKey.has(key)) {
+        byKey.set(key, {
+          key,
+          name: display,
+          tdc: tdcVal,
+          count: 0,
+          hunts: 0,
+          attackEval: evaluateTargetAttackability(display, getDevUser(), now)
+        });
+      } else if (tdcVal != null) {
+        byKey.get(key).tdc = tdcVal;
+      }
     }
 
     getAllAllianceAttacks(now).forEach((a) => {
@@ -3965,6 +4033,63 @@
     const players = getKnownPlayers(now);
     const meKey = normalizePseudo(devUser);
     const selected = selectedPlayerKey ? players.find((p) => p.key === selectedPlayerKey) : null;
+
+    if (!selected) {
+      const listHtml = !players.length
+        ? `<div class="fmz-gb-empty">Aucun joueur ${OWN_ALLIANCE_TAG} enregistré (ouvre la page Membres).</div>`
+        : players
+            .map((p) => {
+              const isMe = p.key === meKey;
+              const ev = p.attackEval || {};
+              const dotClass = ev.attackable === true ? "ok" : (ev.attackable === false ? "no" : "na");
+              const dotTxt = isMe
+                ? "MOI"
+                : (ev.attackable === true ? "OK" : (ev.attackable === false ? "NON" : "?"));
+              const tdcTxt = p.tdc ? `${formatNumber(p.tdc)} cm²` : "TDC ?";
+              const metaBits = [];
+              if (p.count > 0) metaBits.push(`⚔️${p.count}`);
+              if (p.hunts > 0) metaBits.push(`🏹${p.hunts}`);
+              const rightMeta = metaBits.length
+                ? `<span class="fmz-gb-badge ${p.count > 0 ? "alert" : ""}">${metaBits.join(" ")}</span>`
+                : "";
+              return `
+                <button class="fmz-gb-player ${isMe ? "me" : ""} ${p.count > 0 ? "attacked" : ""}" data-pl-select="${esc(p.key)}" type="button">
+                  <span>
+                    <b>${esc(p.name)}</b>${isMe ? " (moi)" : ""}
+                    <span class="fmz-gb-player-tdc">· ${esc(tdcTxt)}</span>
+                  </span>
+                  <span style="display:flex;align-items:center;gap:5px">
+                    <span class="fmz-gb-atk-dot ${dotClass}" title="${esc(ev.reason || "")}">${esc(dotTxt)}</span>
+                    ${rightMeta}
+                  </span>
+                </button>
+              `;
+            })
+            .join("");
+
+      return `
+        <div id="fmz-gb-card">
+          <div class="fmz-gb-head">
+            <b>👤 Joueurs ${OWN_ALLIANCE_TAG} (${players.length})</b>
+            <div class="fmz-gb-head-actions">
+              <button id="fmz-gb-refresh" class="fmz-gb-btn" type="button" title="Rafraîchir maintenant">🔄</button>
+              <button id="fmz-gb-pl-list-close" class="fmz-gb-btn" type="button" title="Réduire">_</button>
+            </div>
+          </div>
+
+          <div class="fmz-gb-status-bar">
+            ${renderSyncStatusHtml()}
+            <a class="fmz-gb-link" href="${esc(SHORTCUT_LINKS.membersUrl)}">📋 Membres (TDC)</a>
+          </div>
+
+          <div class="fmz-gb-summary">
+            Règle <b>50%–300%</b> vs <b>${esc(devUser)}</b> : <span class="fmz-gb-atk-dot ok">OK</span> attaquable · <span class="fmz-gb-atk-dot no">NON</span> hors plage · <span class="fmz-gb-atk-dot na">?</span> TDC inconnu
+          </div>
+
+          <div>${listHtml}</div>
+        </div>
+      `;
+    }
 
     if (selected) {
       const attacks = getAllAllianceAttacks(now).filter((a) => normalizePseudo(a.target) === selected.key);
@@ -4564,6 +4689,8 @@
       const next = !isPlayersBubbleOpen();
       setPlayersBubbleOpen(next);
       if (next) {
+        selectedPlayerKey = "";
+        selectedPlayerTab = "overview";
         setGlobalBubbleOpen(false);
         setConvoyBubbleOpen(false);
         setAllianceBubbleOpen(false);
@@ -4603,6 +4730,16 @@
       plBackBtn.onclick = () => {
         selectedPlayerKey = "";
         selectedPlayerTab = "overview";
+        renderGlobalBubble(true);
+      };
+    }
+
+    const closePlayersListBtn = root.querySelector("#fmz-gb-pl-list-close");
+    if (closePlayersListBtn) {
+      closePlayersListBtn.onclick = () => {
+        selectedPlayerKey = "";
+        selectedPlayerTab = "overview";
+        setPlayersBubbleOpen(false);
         renderGlobalBubble(true);
       };
     }
