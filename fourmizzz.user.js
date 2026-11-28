@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Le Dôme De La Paix - Fourmizzz S5 (Ressources, Armee, Commerce & Alliance)
 // @namespace    https://s5.fourmizzz.fr/
-// @version      0.5.77-worker
+// @version      0.5.79-worker
 // @updateURL    https://raw.githubusercontent.com/LDDLP/applizze-script/main/fourmizzz.user.js
 // @downloadURL  https://raw.githubusercontent.com/LDDLP/applizze-script/main/fourmizzz.user.js
 // @description  Outils d'alliance centralisés sur S5 : chasses en tête du Dôme avec TDC + chassé, attaques compactes avec filtres et tri, TDC attaquant/cible en rouge/vert, règle 50%-300% / 20% max, convois, fiche joueur dédiée, import auto construction/laboratoire et animations UI fluides.
@@ -22,7 +22,7 @@
   const HOST = window.location.hostname.toLowerCase();
   if (HOST !== "s5.fourmizzz.fr") return;
 
-  const SCRIPT_VERSION = "0.5.77-worker";
+  const SCRIPT_VERSION = "0.5.79-worker";
 
   const PATH = window.location.pathname.toLowerCase();
   const HREF = window.location.href.toLowerCase();
@@ -836,7 +836,7 @@
     return 0;
   }
 
-  function simulateTimeline(nowMs = Date.now(), extraHunts = [], untilMs = Infinity) {
+  function simulateTimeline(nowMs = Date.now(), extraHunts = [], untilMs = Infinity, extraAttacks = []) {
     const running = new Map();
     const getRun = (pseudo) => {
       const k = normalizePseudo(pseudo);
@@ -849,6 +849,9 @@
     const seen = new Set();
 
     getAllAllianceAttacks(nowMs).forEach((a) =>
+      events.push({ kind: "attack", at: Number(a.arrivalAt || 0), item: a })
+    );
+    (extraAttacks || []).forEach((a) =>
       events.push({ kind: "attack", at: Number(a.arrivalAt || 0), item: a })
     );
 
@@ -925,6 +928,168 @@
     }
 
     return { at: nowMs, attacks, hunts, finalTdc: running };
+  }
+
+  function evaluateSafeAttackTake(targetPseudo, attackerPseudo, availableAnts, arrivalAt) {
+    const now = Date.now();
+    const targetKey = normalizePseudo(targetPseudo);
+    const attackerKey = normalizePseudo(attackerPseudo);
+    const ants = Math.max(0, Math.floor(Number(availableAnts) || 0));
+    if (!targetKey || !attackerKey || !ants || !arrivalAt || arrivalAt <= now) {
+      return { ready: false, reason: "Renseigne ton armée et vérifie les données d'attaque." };
+    }
+
+    const beforeArrival = simulateTimeline(now, [], arrivalAt - 1);
+    const targetAtArrival = beforeArrival.finalTdc.has(targetKey)
+      ? beforeArrival.finalTdc.get(targetKey) : getPlayerTdc(targetPseudo);
+    const attackerAtArrival = beforeArrival.finalTdc.has(attackerKey)
+      ? beforeArrival.finalTdc.get(attackerKey) : getPlayerTdc(attackerPseudo);
+    if (!(targetAtArrival > 0) || !(attackerAtArrival > 0)) {
+      return { ready: false, reason: "TDC de la cible ou de l'attaquant indisponible." };
+    }
+
+    const ratio = targetAtArrival / attackerAtArrival;
+    if (ratio < 0.5 || ratio > 3) {
+      return { ready: false, reason: `Hors règle 50%–300% à l'arrivée (${Math.round(ratio * 100)}%).` };
+    }
+
+    const theoreticalMax = Math.min(ants, Math.floor(targetAtArrival * 0.2));
+    if (theoreticalMax <= 0) {
+      return { ready: true, maxTake: 0, targetAtArrival, attackerAtArrival, reason: "Prise maximale déjà nulle." };
+    }
+
+    const baseline = simulateTimeline(now);
+    const baselineBySig = baseline.attacks;
+    const isSafe = (take) => {
+      const candidate = {
+        id: "fmz_live_attack_preview",
+        sig: "fmz_live_attack_preview",
+        type: "attack",
+        attacker: playerDisplayName(attackerPseudo),
+        target: playerDisplayName(targetPseudo),
+        ants: take,
+        arrivalAt,
+        active: true
+      };
+      const projected = simulateTimeline(now, [], Infinity, [candidate]);
+      const own = projected.attacks.get("fmz_live_attack_preview");
+      if (!own || own.willFail || own.taken > take) return false;
+
+      for (const [sig, oldEval] of baselineBySig.entries()) {
+        if (Number(oldEval.item && oldEval.item.arrivalAt || 0) < arrivalAt) continue;
+        const nextEval = projected.attacks.get(sig);
+        if (oldEval && !oldEval.willFail && nextEval && nextEval.willFail) return false;
+      }
+      return true;
+    };
+
+    let low = 0;
+    let high = theoreticalMax;
+    while (low < high) {
+      const mid = Math.ceil((low + high) / 2);
+      if (isSafe(mid)) low = mid;
+      else high = mid - 1;
+    }
+
+    return {
+      ready: true,
+      maxTake: low,
+      targetAtArrival,
+      attackerAtArrival,
+      theoreticalMax,
+      constrained: low < theoreticalMax,
+      reason: low < theoreticalMax
+        ? "Limite réduite pour préserver les autres attaques."
+        : "Aucune autre attaque connue n'est compromise."
+    };
+  }
+
+  function getAttackPageTargetPseudo() {
+    if (!IS_ENNEMIE || !document.body) return "";
+    const text = document.body.innerText || "";
+    const match = text.match(/vous\s+allez\s+attaquer\s+([^\n!]+)\s*!/i);
+    return match ? playerDisplayName(match[1].trim()) : "";
+  }
+
+  function getAttackPageArmyAnts() {
+    const attackButton = Array.from(document.querySelectorAll("button, input[type='submit'], input[type='button']"))
+      .find((el) => /attaquer/i.test(String(el.value || el.textContent || "")));
+    const scope = attackButton ? (attackButton.closest("form") || attackButton.parentElement && attackButton.parentElement.parentElement || document) : document;
+    const inputs = Array.from(scope.querySelectorAll("input[type='text'], input[type='number'], input:not([type])"))
+      .filter((el) => !el.disabled && el.offsetParent !== null && !el.closest("#fmz-gb-root"));
+    return inputs.reduce((sum, el) => sum + (parseFrInt(el.value) || 0), 0);
+  }
+
+  function getAttackPageArrivalAt(targetPseudo) {
+    const attacker = getDevUser();
+    const va = getPlayerAttackSpeed(attacker);
+    const travel = estimateAttackTravelSeconds(attacker, targetPseudo, va);
+    return travel ? Date.now() + travel.seconds * 1000 : null;
+  }
+
+  function setupAllianceAttackLimitBubble() {
+    if (!IS_ENNEMIE || !document.body) return;
+    const target = getAttackPageTargetPseudo();
+    if (!target || !isKnownAllianceMemberName(target)) {
+      const old = document.getElementById("fmz-alliance-attack-limit");
+      if (old) old.remove();
+      return;
+    }
+
+    let anchor = null;
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+    let node;
+    while ((node = walker.nextNode())) {
+      if (/aide\s+sur\s+les\s+attaques/i.test(node.nodeValue || "")) {
+        anchor = node.parentElement;
+        break;
+      }
+    }
+    if (!anchor) return;
+
+    let bubble = document.getElementById("fmz-alliance-attack-limit");
+    if (!bubble) {
+      bubble = document.createElement("span");
+      bubble.id = "fmz-alliance-attack-limit";
+      bubble.style.cssText = "display:inline-block;vertical-align:middle;margin:4px 0 4px 8px;padding:5px 9px;border:1px solid #64748b;border-radius:8px;background:#172033;color:#f8fafc;font-size:12px;line-height:1.35;font-weight:700;box-shadow:0 2px 7px rgba(0,0,0,.18);";
+      anchor.insertAdjacentElement("afterend", bubble);
+    }
+
+    const update = () => {
+      const ants = getAttackPageArmyAnts();
+      const arrivalAt = getAttackPageArrivalAt(target);
+      if (!arrivalAt) {
+        bubble.style.borderColor = "#d97706";
+        bubble.textContent = "🎯 TDC max : VA / coordonnées manquantes";
+        return;
+      }
+      if (ants <= 0) {
+        bubble.style.borderColor = "#64748b";
+        bubble.textContent = "🎯 TDC max récupérable : renseigne ton armée";
+        return;
+      }
+      const result = evaluateSafeAttackTake(target, getDevUser(), ants, arrivalAt);
+      if (!result.ready) {
+        bubble.style.borderColor = "#d97706";
+        bubble.textContent = `🎯 TDC max : indisponible · ${result.reason}`;
+        return;
+      }
+      const color = result.constrained ? "#f59e0b" : "#34d399";
+      bubble.style.borderColor = color;
+      bubble.innerHTML = `🎯 TDC max récupérable : <span style="color:${color}">${formatNumber(result.maxTake)} cm²</span>` +
+        (result.constrained ? `<br><span style="font-weight:500">⚠️ Limite pour préserver les autres attaques</span>` : `<br><span style="font-weight:500">✓ Autres attaques préservées</span>`);
+      bubble.title = result.reason;
+    };
+
+    if (!bubble.dataset.fmzBound) {
+      bubble.dataset.fmzBound = "1";
+      const attackButton = Array.from(document.querySelectorAll("button, input[type='submit'], input[type='button']"))
+        .find((el) => /attaquer/i.test(String(el.value || el.textContent || "")));
+      const scope = attackButton ? (attackButton.closest("form") || attackButton.parentElement && attackButton.parentElement.parentElement || document) : document;
+      scope.addEventListener("input", update, true);
+      scope.addEventListener("change", update, true);
+    }
+    update();
   }
 
   let tdcChainCache = { at: 0, attacks: new Map(), hunts: new Map(), finalTdc: new Map() };
@@ -5440,6 +5605,9 @@
     }
     if (IS_ATTACK_PAGE) {
       reconcileArmeeAttacks();
+    }
+    if (IS_ENNEMIE) {
+      setupAllianceAttackLimitBubble();
     }
     if (IS_COMMERCE) {
       consumePendingCommerceFillIfNeeded();
