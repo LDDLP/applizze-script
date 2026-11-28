@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Le Dôme De La Paix - Fourmizzz S5 (Ressources, Armee, Commerce & Alliance)
 // @namespace    https://s5.fourmizzz.fr/
-// @version      0.5.66-worker
+// @version      0.5.65-worker
 // @updateURL    https://raw.githubusercontent.com/LDDLP/applizze-script/main/fourmizzz.user.js
 // @downloadURL  https://raw.githubusercontent.com/LDDLP/applizze-script/main/fourmizzz.user.js
 // @description  Outils d'alliance centralisés sur S5 : chasses en tête du Dôme avec TDC + chassé, attaques compactes avec filtres et tri, TDC attaquant/cible en rouge/vert, règle 50%-300% / 20% max, convois, fiche joueur dédiée et import auto construction/laboratoire.
@@ -22,7 +22,7 @@
   const HOST = window.location.hostname.toLowerCase();
   if (HOST !== "s5.fourmizzz.fr") return;
 
-  const SCRIPT_VERSION = "0.5.66-worker";
+  const SCRIPT_VERSION = "0.5.65-worker";
 
   const PATH = window.location.pathname.toLowerCase();
   const HREF = window.location.href.toLowerCase();
@@ -2363,7 +2363,7 @@
       style.id = "fmz-armee-style";
       style.textContent = `
         #fmz-armee-badge-wrap{
-          position:fixed;right:12px;bottom:92px;z-index:10001;
+          position:fixed;right:12px;bottom:58px;z-index:10001;
           display:flex;align-items:center;gap:8px;
           font-family:system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif;pointer-events:none;
         }
@@ -3176,195 +3176,292 @@
     style.id = "fmz-global-bubble-style";
     style.textContent = `
       @keyframes fmzUpdateBlink {
-        0%, 100% { border-color:rgba(248,113,113,.25); }
-        50% { border-color:#f87171; }
+        0%, 100% {
+          background:rgba(153,27,27,.95);
+          border-color:#f87171;
+          color:#ffffff;
+          box-shadow:0 0 12px rgba(239,68,68,.85);
+        }
+        50% {
+          background:rgba(239,68,68,.98);
+          border-color:#fecaca;
+          color:#ffffff;
+          box-shadow:0 0 22px rgba(248,113,113,1);
+        }
       }
-      #fmz-gb-root, #fmz-gb-left-dock{
-        --bg:rgba(10,16,28,.84);--sf:rgba(255,255,255,.045);--bd:rgba(255,255,255,.09);
-        --tx:#e6edf7;--mu:#8b97ad;--ac:#22d3ee;--rd:#f87171;--am:#fbbf24;--gr:#34d399;
-        font-family:Inter,system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif;
-        font-size:13px;line-height:1.4;color:var(--tx);font-variant-numeric:tabular-nums;
+      @keyframes fmzHudEnter {
+        from { opacity:0; transform:translateY(6px) scale(.99); }
+        to { opacity:1; transform:translateY(0) scale(1); }
       }
-      #fmz-gb-root *, #fmz-gb-left-dock *{box-sizing:border-box}
-      #fmz-gb-root{
-        position:fixed;left:0;right:0;bottom:0;z-index:10000;
-        width:min(520px,100%);margin:0 auto;
-        display:flex;flex-direction:column;align-items:stretch;gap:10px;
-        padding:0 12px calc(12px + env(safe-area-inset-bottom,0px));
-        pointer-events:none;
-      }
-      #fmz-gb-root > *{pointer-events:auto}
-      #fmz-gb-root.has-armee-badge #fmz-gb-card{margin-bottom:0}
       #fmz-gb-left-dock{
-        position:fixed;left:max(12px,calc(50% - 248px));bottom:calc(12px + env(safe-area-inset-bottom,0px));
-        z-index:10001;display:flex;flex-direction:column-reverse;align-items:flex-start;gap:8px;
+        position:fixed;left:12px;bottom:14px;z-index:10000;
+        display:flex;flex-direction:column;align-items:flex-start;gap:6px;
+        font-family:system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif;
+        font-size:12px;color:#e2e8f0;font-variant-numeric:tabular-nums;
       }
-      .fmz-gb-more{
-        position:relative;width:52px;height:64px;border-radius:22px;cursor:pointer;
-        background:var(--bg);border:1px solid var(--bd);color:var(--mu);font-size:22px;
-        backdrop-filter:blur(14px);box-shadow:0 10px 30px rgba(0,0,0,.5);
+      #fmz-gb-root{
+        position:fixed;right:12px;bottom:14px;z-index:10000;
+        display:flex;flex-direction:column;align-items:flex-end;gap:8px;
+        font-family:system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif;
+        font-size:12px;color:#e2e8f0;font-variant-numeric:tabular-nums;
       }
-      .fmz-gb-more.alert::after{
-        content:"";position:absolute;top:14px;right:12px;width:8px;height:8px;border-radius:50%;
-        background:var(--rd);box-shadow:0 0 8px var(--rd);
-      }
-      .fmz-gb-more-list{
-        display:none;flex-direction:column;gap:6px;padding:8px;border-radius:18px;
-        background:var(--bg);border:1px solid var(--bd);backdrop-filter:blur(14px);
-        box-shadow:0 14px 34px rgba(0,0,0,.55);
-      }
-      #fmz-gb-left-dock.open .fmz-gb-more-list{display:flex}
+      #fmz-gb-root.has-armee-badge #fmz-gb-card{margin-bottom:44px}
+      #fmz-gb-root *, #fmz-gb-left-dock *{box-sizing:border-box}
+      .fmz-gb-dock{display:flex;align-items:center;gap:6px;flex-wrap:wrap;justify-content:flex-end}
       .fmz-gb-fab{
-        display:inline-flex;align-items:center;gap:8px;text-decoration:none;cursor:pointer;
-        min-height:44px;padding:0 14px;border-radius:12px;font-size:13px;font-weight:500;
-        background:var(--sf);color:var(--tx);border:1px solid var(--bd);user-select:none;
+        display:inline-flex;align-items:center;gap:6px;text-decoration:none;
+        background:linear-gradient(135deg,rgba(15,23,42,.92),rgba(17,24,39,.92));
+        color:#e2e8f0;border:1px solid rgba(56,189,248,.32);
+        box-shadow:0 6px 18px rgba(0,0,0,.55),inset 0 1px 0 rgba(255,255,255,.07);
+        backdrop-filter:blur(10px);
+        border-radius:999px;padding:7px 11px;cursor:pointer;
+        font-weight:700;font-size:12px;user-select:none;
+        transition:transform .14s ease,border-color .14s ease,box-shadow .14s ease,background .14s ease;
       }
-      .fmz-gb-fab:hover{border-color:rgba(34,211,238,.5);color:#fff}
-      .fmz-gb-fab.active{color:var(--ac);border-color:rgba(34,211,238,.5)}
-      .fmz-gb-fab.update.needs-update{animation:fmzUpdateBlink 1.6s infinite ease-in-out}
-      .fmz-gb-dock{
-        display:flex;height:64px;margin-left:64px;padding:0 4px;border-radius:22px;
-        background:var(--bg);border:1px solid var(--bd);backdrop-filter:blur(14px);
-        box-shadow:0 10px 30px rgba(0,0,0,.5);
+      .fmz-gb-fab:hover{
+        background:linear-gradient(135deg,rgba(30,41,59,.96),rgba(15,23,42,.96));
+        border-color:rgba(34,211,238,.7);
+        box-shadow:0 8px 22px rgba(0,0,0,.65),0 0 14px rgba(34,211,238,.22);
+        color:#ffffff;transform:translateY(-1px);
       }
-      .fmz-gb-dock .fmz-gb-fab{
-        position:relative;flex:1;flex-direction:column;justify-content:center;gap:3px;padding:0;
-        background:none;border:0;border-radius:16px;font-size:11px;color:var(--mu);
+      .fmz-gb-fab.alert{
+        background:linear-gradient(135deg,rgba(127,29,29,.94),rgba(69,10,10,.94));
+        border-color:rgba(248,113,113,.75);color:#fff;
+        box-shadow:0 6px 20px rgba(127,29,29,.45),0 0 14px rgba(239,68,68,.3);
       }
-      .fmz-gb-dock .fmz-gb-fab:hover{color:var(--tx)}
-      .fmz-gb-dock .fmz-gb-fab.active{color:var(--ac)}
-      .fmz-gb-dock .fmz-gb-fab.active::before{
-        content:"";position:absolute;top:0;left:30%;right:30%;height:2px;border-radius:2px;background:var(--ac);
+      .fmz-gb-fab.convoy.active, .fmz-gb-fab.alliance.active, .fmz-gb-fab.stats.active, .fmz-gb-fab.players.active{
+        background:linear-gradient(135deg,rgba(8,145,178,.42),rgba(30,58,138,.82));
+        border-color:#22d3ee;color:#ecfeff;
+        box-shadow:0 0 16px rgba(34,211,238,.35);
       }
-      .fmz-gb-dock .fmz-gb-fab.alert{color:var(--rd)}
-      .fmz-gb-dock svg{width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
+      .fmz-gb-fab.update{
+        background:linear-gradient(135deg,rgba(6,95,70,.85),rgba(15,23,42,.92));
+        border-color:rgba(52,211,153,.55);color:#d1fae5;
+      }
+      .fmz-gb-fab.update:hover{border-color:#34d399;color:#fff}
+      .fmz-gb-fab.update.needs-update{
+        animation:fmzUpdateBlink 1s infinite ease-in-out;
+      }
       .fmz-gb-pill{
-        position:absolute;top:7px;left:calc(50% + 6px);min-width:16px;height:16px;padding:0 4px;border-radius:99px;
-        display:flex;align-items:center;justify-content:center;
-        font-size:10px;font-weight:600;background:var(--ac);color:#04121a;
+        background:rgba(2,6,23,.8);border:1px solid rgba(56,189,248,.35);border-radius:999px;
+        padding:1px 7px;font-size:11px;color:#67e8f9;font-weight:700;
       }
-      .fmz-gb-fab.alert .fmz-gb-pill{background:var(--rd);color:#fff}
-      .fmz-gb-pill.zero{display:none}
+      .fmz-gb-fab.alert .fmz-gb-pill{
+        background:rgba(69,10,10,.88);border-color:rgba(252,165,165,.6);color:#fecaca;
+      }
       #fmz-gb-card, .fmz-gb-card{
-        width:100%;max-height:calc(100vh - 150px);max-height:calc(100dvh - 150px);
-        overflow-y:auto;overscroll-behavior:contain;padding:14px;border-radius:22px;
-        background:var(--bg) !important;color:var(--tx) !important;opacity:1 !important;
-        border:1px solid var(--bd);backdrop-filter:blur(16px);
-        box-shadow:0 18px 44px rgba(0,0,0,.6);
+        width:min(372px, calc(100vw - 24px));
+        max-height:calc(100vh - 125px);
+        overflow-y:auto;
+        background:linear-gradient(180deg,rgba(11,18,32,.95),rgba(15,23,42,.95)) !important;
+        color:#e2e8f0 !important;
+        opacity:1 !important;
+        border:1px solid rgba(56,189,248,.35);
+        border-radius:14px;
+        padding:11px;
+        box-shadow:0 16px 36px rgba(0,0,0,.78),0 0 24px rgba(14,165,233,.12),inset 0 1px 0 rgba(255,255,255,.08);
+        backdrop-filter:blur(12px);
+        animation:fmzHudEnter .16s ease-out;
       }
       #fmz-gb-card.fmz-player-page{
-        position:fixed;top:56px;left:0;right:0;bottom:auto;
-        width:min(520px,calc(100% - 24px));max-width:none;height:auto;
-        max-height:calc(100vh - 150px);max-height:calc(100dvh - 150px);
-        margin:0 auto !important;z-index:10020;
+        position:fixed;
+        top:64px;left:12px;right:12px;bottom:auto;
+        width:auto;
+        max-width:none;
+        height:auto;
+        max-height:calc(100vh - 76px);
+        max-height:calc(100dvh - 76px);
+        overflow-y:auto;
+        overscroll-behavior:contain;
+        -webkit-overflow-scrolling:touch;
+        animation:none;
+        margin:0 !important;
+        z-index:10020;
+        border-radius:16px;
+        padding:14px;
       }
-      .fmz-gb-head{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:0 0 12px;margin:0;border:0}
-      .fmz-gb-head b{font-size:17px;font-weight:600;color:#fff;letter-spacing:.01em}
-      .fmz-gb-head-actions{display:flex;gap:6px;align-items:center}
+      .fmz-gb-head{
+        display:flex;justify-content:space-between;align-items:center;
+        gap:6px;padding-bottom:8px;margin-bottom:8px;
+        border-bottom:1px solid rgba(56,189,248,.22);
+      }
+      .fmz-gb-head b{font-size:13px;color:#f8fafc;letter-spacing:.02em}
+      .fmz-gb-head-actions{display:flex;gap:5px;align-items:center}
       .fmz-gb-btn{
-        min-height:36px;min-width:36px;padding:0 12px;border-radius:12px;cursor:pointer;
-        background:var(--sf) !important;color:var(--tx) !important;border:1px solid var(--bd);
-        font-size:13px;font-weight:500;
+        background:rgba(30,41,59,.9) !important;color:#f1f5f9 !important;
+        border:1px solid rgba(148,163,184,.35);
+        border-radius:7px;padding:4px 8px;min-height:26px;cursor:pointer;
+        font-size:11px;font-weight:700;
+        transition:background .12s ease,border-color .12s ease;
       }
-      .fmz-gb-btn:hover{border-color:rgba(34,211,238,.5)}
-      .fmz-gb-btn.primary, .fmz-gb-btn.accent{
-        background:rgba(34,211,238,.16) !important;color:#67e8f9 !important;border-color:rgba(34,211,238,.4);
+      .fmz-gb-btn:hover{background:rgba(51,65,85,.95) !important;border-color:#38bdf8}
+      .fmz-gb-btn.primary{
+        background:linear-gradient(135deg,#059669,#047857) !important;
+        border-color:#34d399;color:#ecfdf5 !important;
       }
-      .fmz-gb-filters, .fmz-gb-tabs{display:flex;gap:4px;padding:4px;margin-bottom:10px;border-radius:14px;background:rgba(255,255,255,.05)}
-      .fmz-gb-filter-btn, .fmz-gb-tab{
-        flex:1;min-height:40px;padding:0 6px;border:0;border-radius:10px;cursor:pointer;
-        background:transparent !important;color:var(--mu) !important;font-size:12px;font-weight:500;text-align:center;
+      .fmz-gb-btn.accent{
+        background:linear-gradient(135deg,#0284c7,#1d4ed8) !important;
+        border-color:#38bdf8;color:#f0f9ff !important;
       }
-      .fmz-gb-filter-btn.active, .fmz-gb-tab.active{background:rgba(34,211,238,.14) !important;color:#67e8f9 !important}
-      .fmz-gb-status-bar{display:flex;justify-content:space-between;align-items:center;gap:8px;font-size:12px;color:var(--mu);margin-bottom:12px}
-      .fmz-gb-sync-badge{display:inline-flex;align-items:center;gap:6px;color:var(--mu)}
-      .fmz-gb-sync-badge::before{content:"";width:7px;height:7px;border-radius:50%;background:#64748b}
-      .fmz-gb-sync-badge.ok::before{background:var(--gr);box-shadow:0 0 8px var(--gr)}
-      .fmz-gb-sync-badge.syncing::before{background:var(--ac)}
-      .fmz-gb-sync-badge.backoff::before{background:var(--am)}
-      .fmz-gb-sync-badge.error::before{background:var(--rd)}
-      .fmz-gb-link{color:var(--ac);text-decoration:none;font-weight:500}
-      .fmz-gb-link:hover{text-decoration:underline}
-      .fmz-gb-account-box{background:var(--sf);border:1px solid var(--bd);border-radius:16px;padding:12px;margin-bottom:10px}
-      .fmz-gb-account-row{display:flex;gap:8px;margin-top:8px}
-      .fmz-gb-account-input, .fmz-gb-inp{
-        flex:1;width:100%;min-height:44px;padding:0 12px;border-radius:12px;font-size:14px;
-        background:rgba(255,255,255,.05);color:var(--tx);border:1px solid var(--bd);font-variant-numeric:tabular-nums;
+      .fmz-gb-filters{
+        display:flex;gap:5px;margin-bottom:6px;
       }
-      .fmz-gb-account-input:focus, .fmz-gb-inp:focus{outline:none;border-color:var(--ac)}
-      .fmz-gb-sec{background:var(--sf);border:1px solid var(--bd);border-radius:16px;padding:12px 14px;margin-bottom:10px}
+      .fmz-gb-filter-btn{
+        flex:1;background:rgba(9,15,28,.85) !important;color:#94a3b8 !important;
+        border:1px solid rgba(56,189,248,.18);border-radius:7px;padding:5px 6px;min-height:26px;
+        cursor:pointer;font-size:11px;font-weight:700;text-align:center;
+        transition:all .12s ease;
+      }
+      .fmz-gb-filter-btn.active{
+        background:rgba(8,145,178,.28) !important;color:#67e8f9 !important;
+        border-color:#22d3ee;box-shadow:0 0 10px rgba(34,211,238,.18);
+      }
+      .fmz-gb-status-bar{
+        display:flex;justify-content:space-between;align-items:center;gap:6px;
+        font-size:11px;color:#94a3b8;margin-bottom:8px;padding:0 2px;
+      }
+      .fmz-gb-sync-badge{
+        display:inline-flex;align-items:center;gap:6px;color:#cbd5e1;font-weight:600;
+      }
+      .fmz-gb-sync-badge::before{
+        content:"";width:7px;height:7px;border-radius:999px;
+        background:#64748b;box-shadow:0 0 6px rgba(100,116,139,.6);
+      }
+      .fmz-gb-sync-badge.ok::before{background:#34d399;box-shadow:0 0 8px rgba(52,211,153,.85)}
+      .fmz-gb-sync-badge.syncing::before{background:#22d3ee;box-shadow:0 0 8px rgba(34,211,238,.85)}
+      .fmz-gb-sync-badge.backoff::before{background:#fbbf24;box-shadow:0 0 8px rgba(251,191,36,.8)}
+      .fmz-gb-sync-badge.error::before{background:#f87171;box-shadow:0 0 8px rgba(248,113,113,.85)}
+      .fmz-gb-link{color:#38bdf8;text-decoration:none;font-weight:700}
+      .fmz-gb-link:hover{color:#7dd3fc;text-decoration:underline}
+      .fmz-gb-account-box{
+        background:rgba(9,15,28,.88);border:1px solid rgba(56,189,248,.35);border-radius:10px;
+        padding:8px;margin-bottom:8px;
+      }
+      .fmz-gb-account-row{display:flex;gap:6px;margin-top:6px}
+      .fmz-gb-account-input{
+        flex:1;background:#0f172a;color:#f8fafc;border:1px solid rgba(56,189,248,.4);
+        border-radius:7px;padding:5px 8px;font-size:12px;
+      }
+      .fmz-gb-sec{
+        background:rgba(9,15,28,.84);border:1px solid rgba(56,189,248,.18);border-radius:10px;
+        padding:8px 9px;margin-bottom:7px;
+        box-shadow:inset 0 1px 0 rgba(255,255,255,.04);
+      }
       .fmz-gb-sec:last-child{margin-bottom:0}
-      .fmz-gb-sec.danger{border-left:3px solid var(--rd)}
-      .fmz-gb-sec.urgent{background:rgba(248,113,113,.08);border-color:rgba(248,113,113,.4)}
-      .fmz-gb-sec.in{border-left:3px solid var(--gr)}
-      .fmz-gb-sec.hunt{border-left:3px solid var(--am)}
-      .fmz-gb-sec.out{border-left:3px solid var(--ac)}
+      .fmz-gb-sec.danger{border-left:3px solid #f87171}
+      .fmz-gb-sec.urgent{border-color:rgba(248,113,113,.65);background:rgba(69,10,10,.36)}
+      .fmz-gb-sec.in{border-left:3px solid #34d399}
+      .fmz-gb-sec.hunt{border-left:3px solid #fbbf24}
+      .fmz-gb-sec.out{border-left:3px solid #38bdf8}
       .fmz-gb-sec-title{
-        display:flex;justify-content:space-between;align-items:center;cursor:pointer;user-select:none;
-        font-size:12px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--mu);
+        display:flex;justify-content:space-between;align-items:center;
+        font-weight:700;font-size:11px;letter-spacing:.04em;text-transform:uppercase;
+        color:#e2e8f0;cursor:pointer;user-select:none;
       }
-      .fmz-gb-sec-body{margin-top:8px}
+      .fmz-gb-sec-body{margin-top:6px}
       .fmz-gb-sec.collapsed .fmz-gb-sec-body{display:none}
-      .fmz-gb-row{padding:10px 0;border-top:1px solid rgba(255,255,255,.06)}
-      .fmz-gb-row:first-of-type{border-top:0;padding-top:2px}
-      .fmz-gb-row.soon{border-left:3px solid var(--rd);padding-left:10px;border-radius:2px}
-      .fmz-gb-row.targeted-me{border-left:3px solid var(--rd);padding-left:10px}
-      .fmz-gb-row.will-fail{border-left:3px solid var(--am);padding-left:10px}
-      .fmz-gb-row-top{display:flex;justify-content:space-between;align-items:center;gap:8px}
-      .fmz-gb-cd{white-space:nowrap;font-weight:600;font-size:14px;color:var(--ac)}
-      .fmz-gb-cd.critical{color:var(--rd)}
-      .fmz-gb-cd.warn{color:var(--am)}
-      .fmz-gb-sub{color:var(--mu);font-size:12px;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-      .fmz-gb-tdc{color:var(--mu);font-size:12px;margin-top:2px}
-      .fmz-gb-tdc-line{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-top:4px;font-size:12px}
-      .fmz-gb-tdc-delta{display:inline-flex;align-items:center;gap:3px;font-weight:500;padding:1px 8px;border-radius:8px;background:rgba(255,255,255,.05)}
-      .fmz-gb-tdc-down{color:var(--rd)}
-      .fmz-gb-tdc-up{color:var(--gr)}
-      .fmz-gb-tdc-flat{color:var(--mu)}
-      .fmz-gb-rule{color:var(--gr);font-size:12px;margin-top:2px}
-      .fmz-gb-fail{color:var(--am);font-size:12px;font-weight:500;margin-top:2px}
-      .fmz-gb-prog{height:3px;background:rgba(255,255,255,.1);border-radius:3px;overflow:hidden;margin-top:6px}
-      .fmz-gb-prog > span{display:block;height:100%;background:var(--ac);border-radius:3px}
-      .fmz-gb-empty{color:var(--mu);font-size:12px}
-      .fmz-gb-grid2{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:6px}
-      .fmz-gb-lbl{display:block;color:var(--mu);font-size:12px;margin-top:6px}
-      .fmz-gb-actions{display:flex;gap:8px;margin-top:8px}
-      .fmz-gb-actions button{flex:1}
-      .fmz-gb-msg{margin-top:6px;font-size:12px;color:var(--gr)}
-      .fmz-gb-msg.warn{color:var(--rd)}
-      .fmz-gb-player{
-        display:flex;justify-content:space-between;align-items:center;gap:8px;width:100%;min-height:48px;
-        padding:0 14px;margin-bottom:6px;border-radius:14px;cursor:pointer;text-align:left;font-size:14px;
-        background:var(--sf) !important;color:var(--tx) !important;border:1px solid var(--bd);
+      .fmz-gb-row{padding:6px 4px;border-top:1px solid rgba(148,163,184,.12);line-height:1.35}
+      .fmz-gb-row.soon{background:rgba(239,68,68,.14);padding:6px 7px;border-radius:8px}
+      .fmz-gb-row.targeted-me{border-left:2px solid #f87171;padding-left:7px}
+      .fmz-gb-row.will-fail{background:rgba(245,158,11,.14);border-left:2px solid #fbbf24;padding:6px 7px;border-radius:8px}
+      .fmz-gb-row:first-of-type{border-top:none;padding-top:2px}
+      .fmz-gb-row-top{display:flex;justify-content:space-between;align-items:center;gap:6px}
+      .fmz-gb-cd{white-space:nowrap;font-weight:700;font-size:11px;color:#67e8f9}
+      .fmz-gb-cd.critical{color:#fecaca;background:rgba(153,27,27,.85);padding:1px 6px;border-radius:5px;border:1px solid rgba(248,113,113,.5)}
+      .fmz-gb-cd.warn{color:#fde68a}
+      .fmz-gb-sub{color:#94a3b8;font-size:11px;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+      .fmz-gb-tdc{color:#cbd5e1;font-size:11px;margin-top:2px}
+      .fmz-gb-tdc-line{display:flex;flex-wrap:wrap;align-items:center;gap:5px;margin-top:4px;font-size:11px}
+      .fmz-gb-tdc-delta{display:inline-flex;align-items:center;gap:3px;font-weight:700;padding:1px 6px;border-radius:6px}
+      .fmz-gb-tdc-down{color:#fca5a5;background:rgba(127,29,29,.45);border:1px solid rgba(248,113,113,.45)}
+      .fmz-gb-tdc-up{color:#6ee7b7;background:rgba(6,78,59,.45);border:1px solid rgba(52,211,153,.45)}
+      .fmz-gb-tdc-flat{color:#cbd5e1;background:rgba(30,41,59,.75);border:1px solid rgba(148,163,184,.25)}
+      .fmz-gb-rule{color:#6ee7b7;font-size:11px;margin-top:2px}
+      .fmz-gb-fail{color:#fbbf24;font-size:11px;font-weight:700;margin-top:2px}
+      .fmz-gb-prog{
+        height:4px;background:rgba(30,41,59,.9);border-radius:999px;
+        overflow:hidden;margin-top:5px;border:1px solid rgba(56,189,248,.15);
       }
-      .fmz-gb-player:hover{border-color:rgba(34,211,238,.5)}
-      .fmz-gb-player.me{border-left:3px solid var(--gr)}
-      .fmz-gb-player.attacked{border-left:3px solid var(--rd)}
-      .fmz-gb-player-tdc{color:var(--mu);font-size:12px;margin-left:6px}
-      .fmz-gb-atk-dot{display:inline-flex;align-items:center;justify-content:center;min-width:18px;height:18px;padding:0 5px;border-radius:99px;font-size:10px;font-weight:600}
-      .fmz-gb-atk-dot.ok{background:rgba(52,211,153,.16);color:var(--gr)}
-      .fmz-gb-atk-dot.no{background:rgba(248,113,113,.16);color:var(--rd)}
-      .fmz-gb-atk-dot.na{background:rgba(255,255,255,.07);color:var(--mu)}
-      .fmz-gb-badge{background:rgba(255,255,255,.07);color:var(--tx);border-radius:99px;padding:2px 8px;font-size:11px;font-weight:500;min-width:22px;text-align:center}
-      .fmz-gb-badge.alert{background:rgba(248,113,113,.16);color:var(--rd)}
-      .fmz-gb-summary{font-size:12px;line-height:1.6;color:var(--mu);padding:0 2px 10px}
-      .fmz-gb-lvl-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
-      .fmz-gb-lvl-card{padding:10px;border-radius:14px;background:var(--sf);border:1px solid var(--bd)}
-      .fmz-gb-lvl-name{color:var(--mu);font-size:11px;line-height:1.3;min-height:29px}
-      .fmz-gb-lvl-val{color:#fff;font-size:20px;font-weight:600;margin-top:2px}
-      .fmz-gb-lvl-prog{color:var(--am);font-size:10px;margin-top:2px}
-      .fmz-gb-lvlbar{height:3px;border-radius:3px;background:rgba(255,255,255,.1);margin-top:8px}
-      .fmz-gb-lvlbar i{display:block;height:100%;border-radius:3px;background:var(--ac)}
+      .fmz-gb-prog > span{
+        display:block;height:100%;
+        background:linear-gradient(90deg,#22d3ee,#34d399);
+        border-radius:999px;
+      }
+      .fmz-gb-empty{color:#94a3b8;font-size:11px}
+      .fmz-gb-grid2{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:5px}
+      .fmz-gb-lbl{display:block;color:#94a3b8;font-size:11px;margin-top:5px}
+      .fmz-gb-inp{
+        width:100%;background:#0f172a;color:#f8fafc;border:1px solid rgba(56,189,248,.32);
+        border-radius:7px;padding:5px 8px;font-size:12px;margin-top:2px;
+        font-variant-numeric:tabular-nums;
+      }
+      .fmz-gb-inp:focus{outline:none;border-color:#22d3ee}
+      .fmz-gb-actions{display:flex;gap:6px;margin-top:7px}
+      .fmz-gb-actions button{flex:1}
+      .fmz-gb-msg{margin-top:6px;font-size:11px;color:#6ee7b7}
+      .fmz-gb-msg.warn{color:#fca5a5}
+      .fmz-gb-player{
+        display:flex;justify-content:space-between;align-items:center;gap:6px;
+        width:100%;background:rgba(9,15,28,.86) !important;color:#f1f5f9 !important;
+        border:1px solid rgba(56,189,248,.18);border-radius:8px;padding:7px 9px;margin-bottom:5px;
+        cursor:pointer;font-size:12px;text-align:left;
+        transition:border-color .12s ease,background .12s ease;
+      }
+      .fmz-gb-player:hover{background:rgba(15,23,42,.96) !important;border-color:#22d3ee}
+      .fmz-gb-player.me{border-left:3px solid #34d399}
+      .fmz-gb-player.attacked{border-left:3px solid #f87171}
+      .fmz-gb-player-tdc{color:#94a3b8;font-size:11px;margin-left:6px}
+      .fmz-gb-atk-dot{
+        display:inline-flex;align-items:center;justify-content:center;
+        min-width:18px;height:18px;padding:0 5px;border-radius:999px;
+        font-size:10px;font-weight:800;line-height:1;
+      }
+      .fmz-gb-atk-dot.ok{
+        background:rgba(16,185,129,.22);color:#6ee7b7;border:1px solid rgba(52,211,153,.65);
+        box-shadow:0 0 8px rgba(16,185,129,.35);
+      }
+      .fmz-gb-atk-dot.no{
+        background:rgba(239,68,68,.24);color:#fca5a5;border:1px solid rgba(248,113,113,.7);
+        box-shadow:0 0 8px rgba(239,68,68,.35);
+      }
+      .fmz-gb-atk-dot.na{
+        background:rgba(100,116,139,.25);color:#cbd5e1;border:1px solid rgba(148,163,184,.35);
+      }
+      .fmz-gb-badge{
+        background:rgba(30,41,59,.9);color:#e2e8f0;border-radius:999px;
+        padding:2px 7px;font-size:11px;font-weight:700;min-width:22px;text-align:center;
+        border:1px solid rgba(148,163,184,.25);
+      }
+      .fmz-gb-badge.alert{background:rgba(153,27,27,.85);color:#fecaca;border:1px solid rgba(248,113,113,.65)}
+      .fmz-gb-summary{
+        background:rgba(9,15,28,.88);border:1px solid rgba(56,189,248,.24);border-radius:10px;
+        padding:8px 9px;margin-bottom:7px;font-size:11px;line-height:1.55;color:#cbd5e1;
+      }
+      .fmz-gb-tabs{
+        display:flex;gap:6px;margin-bottom:10px;
+      }
+      .fmz-gb-tab{
+        flex:1;background:rgba(9,15,28,.88) !important;color:#94a3b8 !important;
+        border:1px solid rgba(56,189,248,.2);border-radius:8px;padding:7px 8px;
+        cursor:pointer;font-size:11px;font-weight:700;text-align:center;
+      }
+      .fmz-gb-tab.active{
+        background:rgba(8,145,178,.32) !important;color:#ecfeff !important;
+        border-color:#22d3ee;
+      }
+      .fmz-gb-lvl-grid{
+        display:grid;grid-template-columns:repeat(auto-fill,minmax(155px,1fr));gap:6px;
+      }
+      .fmz-gb-lvl-card{
+        background:rgba(9,15,28,.88);border:1px solid rgba(56,189,248,.18);
+        border-radius:8px;padding:7px 8px;font-size:11px;
+      }
+      .fmz-gb-lvl-name{color:#e2e8f0;font-weight:700}
+      .fmz-gb-lvl-val{color:#67e8f9;font-weight:800;margin-top:2px}
+      .fmz-gb-lvl-prog{color:#fbbf24;font-size:10px;margin-top:2px}
     `;
     (document.head || document.body).appendChild(style);
   }
-
-  const NAV_ICONS = {
-    dome: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 0118 0M5 12v7h14v-7M10 19v-4h4v4"/></svg>',
-    alliance: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/></svg>',
-    convoy: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7h11v9H3zM14 10h4l3 3v3h-7"/><circle cx="7" cy="18" r="1.6"/><circle cx="17" cy="18" r="1.6"/></svg>',
-    players: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21c1-4 4-6 8-6s7 2 8 6"/></svg>'
-  };
 
   function renderSyncStatusHtml() {
     const st = String(syncStatus.state || "idle");
@@ -3404,7 +3501,7 @@
     return `
       <div class="fmz-gb-sec ${extraClass} ${collapsed ? "collapsed" : ""}" data-sec="${esc(key)}">
         <div class="fmz-gb-sec-title" data-toggle-sec="${esc(key)}">
-          <span>${arrow} ${String(title).replace(/^[^\p{L}\p{N}]+/u, "")}</span>
+          <span>${arrow} ${title}</span>
           <span>${count}</span>
         </div>
         <div class="fmz-gb-sec-body">${bodyHtml}</div>
@@ -4011,8 +4108,7 @@
             return `
               <div class="fmz-gb-lvl-card">
                 <div class="fmz-gb-lvl-name">${esc(name)}</div>
-                <div class="fmz-gb-lvl-val">${esc(lvl)}</div>
-                <div class="fmz-gb-lvlbar"><i style="width:${Math.max(0, Math.min(100, Math.round((Number(lvl) / 20) * 100)))}%"></i></div>
+                <div class="fmz-gb-lvl-val">Niveau ${esc(lvl)}</div>
                 ${target != null ? `<div class="fmz-gb-lvl-prog">En cours → niv. ${esc(target)}</div>` : ""}
               </div>
             `;
@@ -4327,28 +4423,25 @@
 
     const updateBtnClass = `fmz-gb-fab update${updateAvailableInfo.available ? " needs-update" : ""}`;
     const updateBtnLabel = updateAvailableInfo.available
-      ? `MàJ (${esc(updateAvailableInfo.remoteVersion)})`
-      : "MàJ script";
+      ? `⬆️ MàJ (${esc(updateAvailableInfo.remoteVersion)})`
+      : "⬆️ MàJ script";
     const updateBtnTitle = updateAvailableInfo.available
       ? `Nouvelle version ${updateAvailableInfo.remoteVersion} disponible (actuelle : ${SCRIPT_VERSION})`
       : `Script à jour (${SCRIPT_VERSION})`;
 
     const leftDockHtml = `
-      <button id="fmz-gb-more" class="fmz-gb-more${updateAvailableInfo.available ? " alert" : ""}" type="button" aria-label="Plus d'options" aria-expanded="false">⋯</button>
-      <div class="fmz-gb-more-list">
       <a id="fmz-gb-discord-fab" class="fmz-gb-fab" href="${esc(SHORTCUT_LINKS.discordUrl)}" target="_blank" rel="noopener noreferrer" title="Ouvrir Discord">
-        <span>Discord</span>
+        <span>💬 Discord</span>
       </a>
       <a id="fmz-gb-site-fab" class="fmz-gb-fab" href="${esc(SHORTCUT_LINKS.siteUrl)}" target="_blank" rel="noopener noreferrer" title="Ouvrir le site applizzz">
-        <span>Site</span>
+        <span>🌐 Site</span>
       </a>
       <a id="fmz-gb-update-fab" class="${updateBtnClass}" href="${esc(SHORTCUT_LINKS.scriptUpdateUrl)}" target="_blank" rel="noopener noreferrer" title="${esc(updateBtnTitle)}">
         <span>${updateBtnLabel}</span>
       </a>
       <button id="fmz-gb-stats-fab" class="fmz-gb-fab stats ${isStatsOpen ? "active" : ""}" type="button" title="Statistiques de l'alliance">
-        <span>Statistiques</span>
+        <span>📊 Statistiques</span>
       </button>
-      </div>
     `;
 
     const leftDockSig = [
@@ -4400,18 +4493,9 @@
       leftDock.innerHTML = leftDockHtml;
       lastLeftDockSig = leftDockSig;
 
-      const moreBtn = leftDock.querySelector("#fmz-gb-more");
-      if (moreBtn) {
-        moreBtn.onclick = () => {
-          const open = leftDock.classList.toggle("open");
-          moreBtn.setAttribute("aria-expanded", open ? "true" : "false");
-        };
-      }
-
       const statsFab = leftDock.querySelector("#fmz-gb-stats-fab");
       if (statsFab) {
         statsFab.onclick = () => {
-          leftDock.classList.remove("open");
           const next = !isStatsBubbleOpen();
           setStatsBubbleOpen(next);
           if (next) {
@@ -4438,7 +4522,9 @@
       allHunts.length +
       convoys.outgoing.length;
 
-    const domeBadge = String(incomingAttacks.length > 0 ? incomingAttacks.length : totalEvents);
+    const domeBadge = incomingAttacks.length > 0
+      ? `🛡️ ${incomingAttacks.length}`
+      : `🌐 ${totalEvents}`;
 
     let cardHtml = "";
 
@@ -4659,20 +4745,20 @@
     root.innerHTML = `
       ${cardHtml}
       <div class="fmz-gb-dock">
-        <button id="fmz-gb-fab" class="fmz-gb-fab ${isDomeOpen ? "active" : ""} ${incomingAttacks.length > 0 ? "alert" : ""}" type="button" title="Résumé Dôme de la Paix">
-          ${NAV_ICONS.dome}<span>Dôme</span>
-          <span class="fmz-gb-pill ${domeBadge === "0" ? "zero" : ""}">${domeBadge}</span>
+        <button id="fmz-gb-players-fab" class="fmz-gb-fab players ${isPlayersOpen ? "active" : ""}" type="button" title="Pages joueurs">
+          <span>👤</span>
         </button>
         <button id="fmz-gb-alliance-fab" class="fmz-gb-fab alliance ${isAllianceOpen ? "active" : ""} ${allAllianceAttacks.length > 0 ? "alert" : ""}" type="button" title="Toutes les attaques de l'alliance">
-          ${NAV_ICONS.alliance}<span>Alliance</span>
-          <span class="fmz-gb-pill ${allAllianceAttacks.length > 0 ? "" : "zero"}">${allAllianceAttacks.length}</span>
+          <span>🛡️ Alliance</span>
+          <span class="fmz-gb-pill">${allAllianceAttacks.length}</span>
         </button>
         <button id="fmz-gb-convoy-fab" class="fmz-gb-fab convoy ${isConvoyOpen ? "active" : ""}" type="button" title="Demandes et convois">
-          ${NAV_ICONS.convoy}<span>Convois</span>
-          <span class="fmz-gb-pill ${openRequestsCount > 0 ? "" : "zero"}">${openRequestsCount}</span>
+          <span>🚚 Convois</span>
+          <span class="fmz-gb-pill">${openRequestsCount}</span>
         </button>
-        <button id="fmz-gb-players-fab" class="fmz-gb-fab players ${isPlayersOpen ? "active" : ""}" type="button" title="Pages joueurs">
-          ${NAV_ICONS.players}<span>Joueurs</span>
+        <button id="fmz-gb-fab" class="fmz-gb-fab ${incomingAttacks.length > 0 ? "alert" : ""}" type="button" title="Résumé Dôme de la Paix">
+          <span>Dôme</span>
+          <span class="fmz-gb-pill">${domeBadge}</span>
         </button>
       </div>
     `;
