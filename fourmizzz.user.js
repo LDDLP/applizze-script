@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Le Dôme De La Paix - Fourmizzz S5 (Ressources, Armee, Commerce & Alliance)
 // @namespace    https://s5.fourmizzz.fr/
-// @version      0.5.68-worker
+// @version      0.5.66-worker
 // @updateURL    https://raw.githubusercontent.com/LDDLP/applizze-script/main/fourmizzz.user.js
 // @downloadURL  https://raw.githubusercontent.com/LDDLP/applizze-script/main/fourmizzz.user.js
 // @description  Outils d'alliance centralisés sur S5 : chasses en tête du Dôme avec TDC + chassé, attaques compactes avec filtres et tri, TDC attaquant/cible en rouge/vert, règle 50%-300% / 20% max, convois, fiche joueur dédiée et import auto construction/laboratoire.
@@ -22,7 +22,7 @@
   const HOST = window.location.hostname.toLowerCase();
   if (HOST !== "s5.fourmizzz.fr") return;
 
-  const SCRIPT_VERSION = "0.5.68-worker";
+  const SCRIPT_VERSION = "0.5.66-worker";
 
   const PATH = window.location.pathname.toLowerCase();
   const HREF = window.location.href.toLowerCase();
@@ -3885,8 +3885,16 @@
         <div><label class="fmz-gb-lbl">🪵 Bois</label><input class="fmz-gb-inp" id="fmz-cv-new-wood" type="number" min="0" placeholder="0"></div>
         <div><label class="fmz-gb-lbl">🍎 Pommes</label><input class="fmz-gb-inp" id="fmz-cv-new-apples" type="number" min="0" placeholder="0"></div>
       </div>
-      <label class="fmz-gb-lbl">Motif</label>
-      <input class="fmz-gb-inp" id="fmz-cv-new-note" type="text" maxlength="200" placeholder="Ex : construction / évolution">
+      <label class="fmz-gb-lbl">Motif du convoi · Mise à niveau</label>
+      <select class="fmz-gb-inp" id="fmz-cv-new-note">
+        <option value="">— Choisir une mise à niveau —</option>
+        <optgroup label="🏗️ Constructions">
+          ${BUILDING_NAMES.map((name) => `<option value="Construction : ${esc(name)}">${esc(name)}</option>`).join("")}
+        </optgroup>
+        <optgroup label="🔬 Laboratoires">
+          ${LAB_NAMES.map((name) => `<option value="Laboratoire : ${esc(name)}">${esc(name)}</option>`).join("")}
+        </optgroup>
+      </select>
       <div class="fmz-gb-actions">
         <button class="fmz-gb-btn primary" id="fmz-cv-add-req" type="button">📨 Envoyer la demande</button>
       </div>
