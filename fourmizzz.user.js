@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Le Dôme De La Paix - Fourmizzz S5 (Ressources, Armee, Commerce & Alliance)
 // @namespace    https://s5.fourmizzz.fr/
-// @version      0.5.61-worker
+// @version      0.5.62-worker
 // @updateURL    https://raw.githubusercontent.com/LDDLP/applizze-script/main/fourmizzz.user.js
 // @downloadURL  https://raw.githubusercontent.com/LDDLP/applizze-script/main/fourmizzz.user.js
 // @description  Outils d'alliance centralisés sur S5 : chasses en tête du Dôme avec TDC + chassé, attaques compactes avec filtres et tri, TDC attaquant/cible en rouge/vert, règle 50%-300% / 20% max, convois, fiche joueur dédiée et import auto construction/laboratoire.
@@ -17,10 +17,12 @@
 (function () {
   "use strict";
 
+  if (typeof window === "undefined" || !window.location) return;
+
   const HOST = window.location.hostname.toLowerCase();
   if (HOST !== "s5.fourmizzz.fr") return;
 
-  const SCRIPT_VERSION = "0.5.61-worker";
+  const SCRIPT_VERSION = "0.5.62-worker";
 
   const PATH = window.location.pathname.toLowerCase();
   const HREF = window.location.href.toLowerCase();
@@ -2218,7 +2220,6 @@
       outgoing: all.filter((c) => normalizePseudo(c.fromName) === meNorm)
     };
   }
-
   let armeeBubbleTimer = null;
   let lastArmeeSnapshotKey = "";
   let commerceBubbleTimer = null;
@@ -3826,7 +3827,6 @@
       </div>
     `;
   }
-
   function bindConvoyBubbleEvents(root) {
     root.querySelectorAll("[data-cv-df]").forEach((inp) => {
       inp.addEventListener("input", () => {
