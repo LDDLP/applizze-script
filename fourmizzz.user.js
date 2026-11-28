@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Le Dôme De La Paix - Fourmizzz S5 (Ressources, Armee, Commerce & Alliance)
 // @namespace    https://s5.fourmizzz.fr/
-// @version      0.5.75-worker
+// @version      0.5.76-worker
 // @updateURL    https://raw.githubusercontent.com/LDDLP/applizze-script/main/fourmizzz.user.js
 // @downloadURL  https://raw.githubusercontent.com/LDDLP/applizze-script/main/fourmizzz.user.js
 // @description  Outils d'alliance centralisés sur S5 : chasses en tête du Dôme avec TDC + chassé, attaques compactes avec filtres et tri, TDC attaquant/cible en rouge/vert, règle 50%-300% / 20% max, convois, fiche joueur dédiée et import auto construction/laboratoire.
@@ -22,7 +22,7 @@
   const HOST = window.location.hostname.toLowerCase();
   if (HOST !== "s5.fourmizzz.fr") return;
 
-  const SCRIPT_VERSION = "0.5.75-worker";
+  const SCRIPT_VERSION = "0.5.76-worker";
 
   const PATH = window.location.pathname.toLowerCase();
   const HREF = window.location.href.toLowerCase();
@@ -97,6 +97,7 @@
   let allianceAttackSort = "time";
   let selectedPlayerKey = "";
   let selectedPlayerTab = "overview";
+  let buildingHubTab = "buildings";
   let updateAvailableInfo = { available: false, remoteVersion: "" };
 
   let lastLeftDockSig = "";
@@ -335,7 +336,6 @@
     } catch (e) {}
   }
 
-  // Noms officiels : seuls ces noms sont acceptés, ce qui évite les doublons « sale » (coûts, durées, texte de la bulle).
   const BUILDING_NAMES = [
     "Caserne", "Champignonnière", "Couveuse", "Dôme", "Entrepôt de Matériaux", "Entrepôt de Nourriture",
     "Etable à cochenilles", "Etable à pucerons", "Laboratoire", "Loge Impériale", "Salle d'analyse",
@@ -356,7 +356,6 @@
       .trim();
   }
 
-  // Le nom officiel est cherché en FIN de texte : « 1 280 000 Etable à pucerons » → « Etable à pucerons ».
   function canonicalLevelName(raw, list) {
     const f = foldName(raw);
     if (!f) return null;
@@ -436,7 +435,9 @@
       const kb = Object.keys(b || {});
       return ka.length === kb.length && ka.every((k) => b[k] &&
         Number(a[k].level) === Number(b[k].level) &&
-        (a[k].targetLevel ?? null) === (b[k].targetLevel ?? null));
+        (a[k].targetLevel ?? null) === (b[k].targetLevel ?? null) &&
+        (a[k].remainingText || "") === (b[k].remainingText || "") &&
+        Math.abs(Number(a[k].finishAt || 0) - Number(b[k].finishAt || 0)) < 5000);
     };
     const nextBuildings = cleanLevelMap(
       { ...(prev.buildings || {}), ...((patch && patch.buildings) || {}) },
@@ -463,11 +464,8 @@
         patch && patch.attackSpeed !== undefined
           ? (patch.attackSpeed != null && Number.isFinite(Number(patch.attackSpeed)) ? Number(patch.attackSpeed) : null)
           : prev.attackSpeed,
-      buildings: cleanLevelMap(
-        { ...(prev.buildings || {}), ...((patch && patch.buildings) || {}) },
-        BUILDING_NAMES
-      ),
-      lab: cleanLevelMap({ ...(prev.lab || {}), ...((patch && patch.lab) || {}) }, LAB_NAMES),
+      buildings: nextBuildings,
+      lab: nextLab,
       updatedAt: Date.now()
     };
 
@@ -803,7 +801,6 @@
       events.push({ kind: "hunt", at: Number(h.arrivalAt || 0), item: h });
     });
 
-    // Ne simule que les mouvements qui seront arrivés au plus tard à l'instant demandé.
     const eligibleEvents = events.filter((ev) => Number.isFinite(ev.at) && ev.at <= untilMs);
     eligibleEvents.sort((x, y) => x.at - y.at);
 
@@ -1014,7 +1011,6 @@
     const dx = from.x - to.x;
     const dy = from.y - to.y;
     const distance = Math.sqrt(dx * dx + dy * dy);
-    // Formule communautaire Fourmizzz : durée en jours convertie en secondes.
     const seconds = (1 - Math.exp(-distance / 350)) * 7.375 * Math.pow(0.9, va) * 86400;
     return Number.isFinite(seconds) && seconds >= 0 ? { distance, seconds: Math.max(1, Math.round(seconds)) } : null;
   }
@@ -1027,7 +1023,6 @@
     const baseTargetTdc = getPlayerTdc(targetPseudo);
     const baseAttackerTdc = getPlayerTdc(attackerPseudo);
 
-    // La portée actuelle se calcule avec les TDC actuels, sans appliquer les mouvements futurs.
     const projTargetTdc = baseTargetTdc;
     const projAttackerTdc = baseAttackerTdc;
 
@@ -1035,7 +1030,6 @@
     const attackerVa = getPlayerAttackSpeed(attackerPseudo);
     const travel = estimateAttackTravelSeconds(attackerPseudo, targetPseudo, attackerVa);
     const arrivalAt = travel ? nowMs + travel.seconds * 1000 : null;
-    // Seuls les mouvements arrivant strictement avant notre attaque sont pris en compte.
     const arrivalSim = arrivalAt ? simulateTimeline(nowMs, [], arrivalAt - 1) : null;
     const arrivalTargetTdc = arrivalSim && arrivalSim.finalTdc.has(targetNorm)
       ? arrivalSim.finalTdc.get(targetNorm) : baseTargetTdc;
@@ -1296,13 +1290,20 @@
   }
 
   function isCleanPlayerName(raw) {
-    const s = String(raw || "").replace(/\s*\([^)]*\)\s*$/, "").trim();
+    const s = String(raw || "").replace(/\s*\([^)]*\)\s*/g, " ").trim();
     if (!s || s.length > 28) return false;
     if (/\b(?:rang|pseudo|terrain|technologie|fourmili[eè]re|chef|gardien|diplomate|recrue)\b/i.test(s)) {
       return false;
     }
     if (s.split(/\s+/).length > 2) return false;
     return true;
+  }
+
+  function playerDisplayName(raw) {
+    return String(raw || "")
+      .replace(/\s*\([^)]*\)\s*/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
   }
 
   function esc(s) {
@@ -1364,7 +1365,7 @@
 
   function parseRemainingSeconds(text) {
     const match = String(text || "").match(
-      /\b(?:dans|durera\s*:?)\s+(.+?)(?=\s+-\s*(?:Retour|Annuler)\b|\s+Arrivée\b|\s+Troupes\s+en\s+attaques?\b|$)/i
+      /\b(?:dans|durera\s*:?|termine\s+dans\s*:?|termin[ée]\s+dans\s*:?)\s+(.+?)(?=\s+-\s*(?:Retour|Annuler)\b|\s+Termin[ée]\s+[àa]\b|\s+Arrivée\b|\s+Troupes\s+en\s+attaques?\b|$)/i
     );
     if (!match) return null;
     const src = match[1];
@@ -1985,14 +1986,51 @@
     };
   }
 
+  function extractActiveTimersFromLines(lines, now = Date.now()) {
+    const timers = [];
+    for (let i = 0; i < lines.length; i++) {
+      const combined = `${lines[i]} ${lines[i + 1] || ""}`;
+      if (/se\s+termine\s+dans\s*:/i.test(combined)) {
+        const nameMatch = combined.match(/^[-*\s]*([A-Za-zÀ-ÿ0-9'’\s-]+?)\s+\d+\s+se\s+termine\s+dans\s*:/i) ||
+          combined.match(/^[-*\s]*([A-Za-zÀ-ÿ0-9'’\s-]+?)\s+se\s+termine\s+dans\s*:/i);
+        const remSec = parseRemainingSeconds(combined);
+        const rawDurMatch = combined.match(/se\s+termine\s+dans\s*:\s*([^-\r\n]+?)(?=\s*-\s*Annuler|\s+Termin[ée]|$)/i);
+        timers.push({
+          rawName: nameMatch ? nameMatch[1].trim() : "",
+          remainingText: rawDurMatch ? rawDurMatch[1].trim() : (remSec ? formatDuration(remSec) : ""),
+          finishAt: remSec && remSec > 0 ? now + remSec * 1000 : 0
+        });
+      }
+    }
+    return timers;
+  }
+
+  function matchTimerToEntry(entryName, targetLevel, timers, list) {
+    const canon = canonicalLevelName(entryName, list);
+    if (!canon) return { remainingText: "", finishAt: 0 };
+    const canonFold = foldName(canon);
+    const found = timers.find((t) => {
+      if (!t.rawName) return false;
+      const tFold = foldName(t.rawName);
+      return tFold === canonFold || canonFold.startsWith(tFold) || tFold.startsWith(canonFold);
+    });
+    if (found) return { remainingText: found.remainingText, finishAt: found.finishAt };
+    if (targetLevel != null && timers.length === 1) {
+      return { remainingText: timers[0].remainingText, finishAt: timers[0].finishAt };
+    }
+    return { remainingText: "", finishAt: 0 };
+  }
+
   function scrapeConstructionPage(forceScan = false) {
     if (!IS_CONSTRUCTION || !document.body) return 0;
+    const now = Date.now();
     const text = readPageTextWithoutOwnUi();
     const sig = text.replace(/\s+/g, " ").trim();
     if (!forceScan && sig && sig === lastConstructionSig) return 0;
     lastConstructionSig = sig;
 
     const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+    const timers = extractActiveTimersFromLines(lines, now);
     const buildings = {};
 
     for (let i = 0; i < lines.length; i++) {
@@ -2003,10 +2041,13 @@
       if (!entry) continue;
       const bName = canonicalLevelName(entry.name, BUILDING_NAMES);
       if (!bName) continue;
+      const timerInfo = entry.targetLevel != null ? matchTimerToEntry(bName, entry.targetLevel, timers, BUILDING_NAMES) : { remainingText: "", finishAt: 0 };
       buildings[bName] = {
         level: entry.level,
         targetLevel: entry.targetLevel,
-        updatedAt: Date.now()
+        remainingText: timerInfo.remainingText,
+        finishAt: timerInfo.finishAt,
+        updatedAt: now
       };
     }
 
@@ -2019,12 +2060,14 @@
 
   function scrapeLaboratoirePage(forceScan = false) {
     if (!IS_LABORATOIRE || !document.body) return 0;
+    const now = Date.now();
     const text = readPageTextWithoutOwnUi();
     const sig = text.replace(/\s+/g, " ").trim();
     if (!forceScan && sig && sig === lastLaboSig) return 0;
     lastLaboSig = sig;
 
     const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+    const timers = extractActiveTimersFromLines(lines, now);
     const lab = {};
     let detectedVa = null;
 
@@ -2036,10 +2079,13 @@
       if (!entry) continue;
       const labName = canonicalLevelName(entry.name, LAB_NAMES);
       if (!labName) continue;
+      const timerInfo = entry.targetLevel != null ? matchTimerToEntry(labName, entry.targetLevel, timers, LAB_NAMES) : { remainingText: "", finishAt: 0 };
       lab[labName] = {
         level: entry.level,
         targetLevel: entry.targetLevel,
-        updatedAt: Date.now()
+        remainingText: timerInfo.remainingText,
+        finishAt: timerInfo.finishAt,
+        updatedAt: now
       };
       if (labName === "Vitesse d'attaque") {
         detectedVa = entry.level;
@@ -2056,7 +2102,6 @@
     }
     return count;
   }
-
   function extractHuntsFromPage() {
     const now = Date.now();
     const playerName = getDevUser();
@@ -2268,7 +2313,7 @@
         if (!involvesMe) continue;
 
         newlyFailing.push(
-          `• ${atk.attacker} → ${atk.target} (${afterEv.failReason}, TDC ${formatNumber(afterEv.attacker.before)} vs ${formatNumber(afterEv.target.before)} cm²)`
+          `• ${playerDisplayName(atk.attacker)} → ${playerDisplayName(atk.target)} (${afterEv.failReason}, TDC ${formatNumber(afterEv.attacker.before)} vs ${formatNumber(afterEv.target.before)} cm²)`
         );
       }
 
@@ -2320,6 +2365,13 @@
       .sort((a, b) => Number(a.arrivalAt || 0) - Number(b.arrivalAt || 0));
   }
 
+  function getOutgoingAttacksForCurrentUser(now = Date.now()) {
+    const meNorm = normalizePseudo(getDevUser());
+    if (!meNorm) return [];
+
+    return getAllAllianceAttacks(now).filter((a) => normalizePseudo(a.attacker) === meNorm);
+  }
+
   function getAllAllianceAttacks(now = Date.now()) {
     const seen = new Set();
     return readCleanTimedArray(STORAGE_KEYS.attacks, now)
@@ -2338,6 +2390,7 @@
       .filter((h) => h && Number(h.arrivalAt || 0) > now)
       .sort((a, b) => Number(a.arrivalAt || 0) - Number(b.arrivalAt || 0));
   }
+
   let convoyRequests = readJsonArray(STORAGE_KEYS.convoyRequests);
   convoyRequests.forEach((r) => {
     if (!Array.isArray(r.deliveries)) r.deliveries = [];
@@ -2365,8 +2418,8 @@
 
     const byKey = new Map();
     for (const m of activeMovements) {
-      const fromName = (m.from && m.from.name) || m.createdBy || "Joueur";
-      const toName = (m.to && m.to.name) || "Destinataire";
+      const fromName = playerDisplayName((m.from && m.from.name) || m.createdBy || "Joueur");
+      const toName = playerDisplayName((m.to && m.to.name) || "Destinataire");
       const wood = Number(m.wood) || 0;
       const apples = Number(m.apples) || 0;
       const arrivalAt = Number(m.arrivalAt);
@@ -2388,8 +2441,8 @@
       for (const d of r.deliveries) {
         const arrAt = Number(d && d.arrivalAt || 0);
         if (!arrAt || arrAt <= now) continue;
-        const fromName = d.by || d.loggedBy || "Joueur";
-        const toName = r.player || "Destinataire";
+        const fromName = playerDisplayName(d.by || d.loggedBy || "Joueur");
+        const toName = playerDisplayName(r.player || "Destinataire");
         const wood = Number(d.wood) || 0;
         const apples = Number(d.apples) || 0;
         const key = `${normalizePseudo(fromName)}|${normalizePseudo(toName)}|${wood}|${apples}|${Math.round(arrAt / 60000)}`;
@@ -2412,6 +2465,7 @@
       outgoing: all.filter((c) => normalizePseudo(c.fromName) === meNorm)
     };
   }
+
   let armeeBubbleTimer = null;
   let lastArmeeSnapshotKey = "";
   let commerceBubbleTimer = null;
@@ -2505,9 +2559,9 @@
       const rawTargetFull = targetMatch ? targetMatch[1].trim() : "";
       const kindMatch = rawTargetFull.match(/\((Terrain de chasse|Fourmilière|Fourmiliere|Dôme|Dome)\)\s*$/i);
       const targetKind = kindMatch ? kindMatch[1] : "";
-      const targetRaw = kindMatch
-        ? rawTargetFull.slice(0, kindMatch.index).trim()
-        : rawTargetFull;
+      const targetRaw = playerDisplayName(
+        kindMatch ? rawTargetFull.slice(0, kindMatch.index).trim() : rawTargetFull
+      );
       const targetPseudo = normalizePseudo(targetRaw);
 
       if (!targetPseudo) return;
@@ -2542,7 +2596,7 @@
         id: "atk_" + sig + "_" + idx,
         sig,
         type: "attack",
-        attacker: attackerName,
+        attacker: playerDisplayName(attackerName),
         target: targetRaw,
         targetPseudo,
         targetKind,
@@ -2583,7 +2637,7 @@
         const diff = Math.abs(prev.arrivalAt - item.arrivalAt);
         bySig.set(item.sig, {
           ...prev,
-          attacker: attackerName,
+          attacker: playerDisplayName(attackerName),
           target: item.target,
           targetPseudo: item.targetPseudo,
           targetKind: item.targetKind || prev.targetKind,
@@ -2959,7 +3013,7 @@
       if (!m) continue;
 
       const resPart = m[1];
-      const peerRaw = m[2].trim();
+      const peerRaw = playerDisplayName(m[2].trim());
       const peerNorm = normalizePseudo(peerRaw);
       if (!peerNorm) continue;
 
@@ -3428,6 +3482,15 @@
       .fmz-gb-row.will-fail{background:rgba(245,158,11,.14);border-left:2px solid #fbbf24;padding:6px 7px;border-radius:8px}
       .fmz-gb-row:first-of-type{border-top:none;padding-top:2px}
       .fmz-gb-row-top{display:flex;justify-content:space-between;align-items:center;gap:6px}
+      .fmz-gb-rank-btn{
+        display:flex;justify-content:space-between;align-items:center;gap:8px;width:100%;
+        background:transparent !important;border:none !important;color:#f1f5f9 !important;
+        padding:2px 0;cursor:pointer;text-align:left;font-size:12px;
+      }
+      .fmz-gb-rank-btn:hover .fmz-gb-rank-name{color:#67e8f9;text-decoration:underline}
+      .fmz-gb-rank-left{display:inline-flex;align-items:center;gap:7px;min-width:0}
+      .fmz-gb-rank-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+      .fmz-gb-rank-right{display:inline-flex;align-items:center;gap:7px;flex-shrink:0}
       .fmz-gb-cd{white-space:nowrap;font-weight:700;font-size:11px;color:#67e8f9}
       .fmz-gb-cd.critical{color:#fecaca;background:rgba(153,27,27,.85);padding:1px 6px;border-radius:5px;border:1px solid rgba(248,113,113,.5)}
       .fmz-gb-cd.warn{color:#fde68a}
@@ -3462,66 +3525,13 @@
       .fmz-gb-actions button{flex:1}
       .fmz-gb-msg{margin-top:6px;font-size:11px;color:#6ee7b7}
       .fmz-gb-msg.warn{color:#fca5a5}
-      .fmz-gb-dashboard-grid{
-        display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:5px;align-items:stretch;
-      }
-      .fmz-gb-dashboard-player{
-        display:flex;align-items:center;gap:6px;min-width:0;width:100%;margin:0;
-        padding:7px 8px;background:rgba(9,15,28,.86) !important;color:#f1f5f9 !important;
-        border:1px solid rgba(56,189,248,.18);border-radius:8px;cursor:pointer;text-align:left;
-      }
-      .fmz-gb-dashboard-player:hover{border-color:#22d3ee;background:rgba(15,23,42,.96) !important}
-      .fmz-gb-dashboard-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;font-weight:700}
-      .fmz-gb-dashboard-meta{font-size:9px;color:#94a3b8;white-space:nowrap}
-      .fmz-gb-dashboard-player .fmz-gb-safe-dot{flex:0 0 10px;width:10px;height:10px}
-      .fmz-gb-player-list{
-        display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));
-        gap:7px;align-items:stretch;
-      }
-      .fmz-gb-player{
-        display:flex;justify-content:space-between;align-items:center;gap:6px;
-        min-width:0;min-height:48px;width:100%;margin:0;
-        background:rgba(9,15,28,.86) !important;color:#f1f5f9 !important;
-        border:1px solid rgba(56,189,248,.18);border-radius:8px;padding:7px 8px;
-        cursor:pointer;font-size:12px;text-align:left;
-        transition:border-color .12s ease,background .12s ease;
-      }
-      .fmz-gb-player:hover{background:rgba(15,23,42,.96) !important;border-color:#22d3ee}
-      .fmz-gb-player.me{border-left:3px solid #34d399}
-      .fmz-gb-player.attacked{border-left:3px solid #f87171}
-      .fmz-gb-player-main{display:flex;flex-direction:column;gap:3px;min-width:0;overflow:hidden}
-      .fmz-gb-player-main b{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-      .fmz-gb-player-side{display:flex;align-items:center;gap:5px;flex-shrink:0}
-      .fmz-gb-player-tdc{color:#94a3b8;font-size:10px}
       .fmz-gb-safe-dot{
-        display:inline-block;flex:0 0 12px;width:12px;height:12px;border-radius:50%;
+        display:inline-block;flex:0 0 11px;width:11px;height:11px;border-radius:50%;
         border:1px solid rgba(148,163,184,.45);background:#64748b;
       }
       .fmz-gb-safe-dot.ok{background:#22c55e;border-color:#86efac;box-shadow:0 0 8px rgba(34,197,94,.65)}
       .fmz-gb-safe-dot.no{background:#ef4444;border-color:#fca5a5;box-shadow:0 0 8px rgba(239,68,68,.55)}
       .fmz-gb-safe-dot.na{background:#64748b;border-color:#cbd5e1}
-      .fmz-gb-atk-dot{
-        display:inline-flex;align-items:center;justify-content:center;
-        min-width:18px;height:18px;padding:0 5px;border-radius:999px;
-        font-size:10px;font-weight:800;line-height:1;
-      }
-      .fmz-gb-atk-dot.ok{
-        background:rgba(16,185,129,.22);color:#6ee7b7;border:1px solid rgba(52,211,153,.65);
-        box-shadow:0 0 8px rgba(16,185,129,.35);
-      }
-      .fmz-gb-atk-dot.no{
-        background:rgba(239,68,68,.24);color:#fca5a5;border:1px solid rgba(248,113,113,.7);
-        box-shadow:0 0 8px rgba(239,68,68,.35);
-      }
-      .fmz-gb-atk-dot.na{
-        background:rgba(100,116,139,.25);color:#cbd5e1;border:1px solid rgba(148,163,184,.35);
-      }
-      .fmz-gb-badge{
-        background:rgba(30,41,59,.9);color:#e2e8f0;border-radius:999px;
-        padding:2px 7px;font-size:11px;font-weight:700;min-width:22px;text-align:center;
-        border:1px solid rgba(148,163,184,.25);
-      }
-      .fmz-gb-badge.alert{background:rgba(153,27,27,.85);color:#fecaca;border:1px solid rgba(248,113,113,.65)}
       .fmz-gb-summary{
         background:rgba(9,15,28,.88);border:1px solid rgba(56,189,248,.24);border-radius:10px;
         padding:8px 9px;margin-bottom:7px;font-size:11px;line-height:1.55;color:#cbd5e1;
@@ -3539,17 +3549,15 @@
         border-color:#22d3ee;
       }
       .fmz-gb-lvl-grid{
-        display:grid;grid-template-columns:repeat(auto-fill,minmax(155px,1fr));gap:6px;
+        display:grid;grid-template-columns:repeat(auto-fill,minmax(145px,1fr));gap:6px;
       }
-      @media(max-width:360px){.fmz-gb-dashboard-grid{grid-template-columns:1fr}}
-
       .fmz-gb-lvl-card{
         background:rgba(9,15,28,.88);border:1px solid rgba(56,189,248,.18);
         border-radius:8px;padding:7px 8px;font-size:11px;
       }
       .fmz-gb-lvl-name{color:#e2e8f0;font-weight:700}
       .fmz-gb-lvl-val{color:#67e8f9;font-weight:800;margin-top:2px}
-      .fmz-gb-lvl-prog{color:#fbbf24;font-size:10px;margin-top:2px}
+      .fmz-gb-lvl-prog{color:#fbbf24;font-size:10px;margin-top:2px;font-weight:700}
     `;
     (document.head || document.body).appendChild(style);
   }
@@ -3617,7 +3625,7 @@
           const key = normalizePseudo(pName);
           if (!seen.has(key)) {
             seen.add(key);
-            cleaned.push({ name: pName, tdc: Math.floor(numVal) });
+            cleaned.push({ key, name: pName, tdc: Math.floor(numVal) });
           }
         }
       }
@@ -3627,23 +3635,16 @@
       return cleaned.sort((a, b) => b.tdc - a.tdc);
     }
 
-    return fallbackPlayers || [];
+    return (fallbackPlayers || []).map((p) => ({
+      key: normalizePseudo(p.name),
+      name: playerDisplayName(p.name),
+      tdc: Math.floor(Number(p.tdc) || 0)
+    }));
   }
 
   function buildStatsBubbleHtml(devUser, now, collapsedMap) {
     const stats = readAllianceStats();
-    const dashboardPlayers = getKnownPlayers(now);
     const meKey = normalizePseudo(devUser);
-    const dashboardPlayersHtml = !dashboardPlayers.length
-      ? `<div class="fmz-gb-empty">Aucun joueur disponible. Ouvre la page Membres pour actualiser les données.</div>`
-      : dashboardPlayers.map((p) => {
-          const isMe = p.key === meKey;
-          const ev = p.attackEval || {};
-          const dotClass = isMe ? "na" : (ev.safeToAttack === true ? "ok" : (ev.safeToAttack === false ? "no" : "na"));
-          const dotTitle = isMe ? "Ton compte" : (ev.safeReason || "Vérification impossible");
-          const tdcText = p.tdc ? `${formatNumber(p.tdc)} cm²` : "TDC ?";
-          return `<button class="fmz-gb-dashboard-player ${isMe ? "me" : ""}" data-dashboard-player="${esc(p.key)}" type="button" title="${esc(dotTitle)}"><span class="fmz-gb-dashboard-name">${esc(p.name)}</span><span class="fmz-gb-dashboard-meta">${esc(tdcText)}</span><span class="fmz-gb-safe-dot ${dotClass}" aria-label="${esc(dotTitle)}"></span></button>`;
-        }).join("");
     const tdcMap = readAllianceTdcMap();
     const knownKeys = getKnownAllianceKeys();
     const playersFromMap = Object.entries(tdcMap)
@@ -3657,7 +3658,11 @@
           v.tdc > 0 &&
           isCleanPlayerName(v.pseudo)
       )
-      .map(([, v]) => ({ name: playerDisplayName(v.pseudo), tdc: Math.floor(v.tdc) }))
+      .map(([, v]) => ({
+        key: normalizePseudo(playerDisplayName(v.pseudo)),
+        name: playerDisplayName(v.pseudo),
+        tdc: Math.floor(v.tdc)
+      }))
       .sort((a, b) => b.tdc - a.tdc);
 
     const totalTdcFromMap = playersFromMap.reduce((sum, p) => sum + p.tdc, 0);
@@ -3699,14 +3704,26 @@
     const rankingHtml = !rankingList.length
       ? `<div class="fmz-gb-empty">Aucun classement ${OWN_ALLIANCE_TAG} disponible (ouvre la page Membres).</div>`
       : rankingList
-          .map((item, idx) => `
-            <div class="fmz-gb-row">
-              <div class="fmz-gb-row-top">
-                <span><b>${idx + 1}. ${esc(item.name)}</b></span>
-                <span class="fmz-gb-cd">${formatNumber(item.tdc)} cm²</span>
+          .map((item, idx) => {
+            const pKey = item.key || normalizePseudo(item.name);
+            const isMe = pKey === meKey;
+            const ev = evaluateTargetAttackability(item.name, devUser, now);
+            const dotClass = isMe ? "na" : (ev.safeToAttack === true ? "ok" : (ev.safeToAttack === false ? "no" : "na"));
+            const dotTitle = isMe ? "Ton compte" : (ev.safeReason || "Vérification impossible");
+            return `
+              <div class="fmz-gb-row">
+                <button class="fmz-gb-rank-btn" data-dashboard-player="${esc(pKey)}" type="button" title="Ouvrir la fiche de ${esc(item.name)}">
+                  <span class="fmz-gb-rank-left">
+                    <b class="fmz-gb-rank-name">${idx + 1}. ${esc(item.name)}</b>
+                  </span>
+                  <span class="fmz-gb-rank-right">
+                    <span class="fmz-gb-cd">${formatNumber(item.tdc)} cm²</span>
+                    <span class="fmz-gb-safe-dot ${dotClass}" aria-label="${esc(dotTitle)}" title="${esc(dotTitle)}"></span>
+                  </span>
+                </button>
               </div>
-            </div>
-          `)
+            `;
+          })
           .join("");
 
     return `
@@ -3733,22 +3750,6 @@
           !!collapsedMap.st_overview
         )}
 
-        <div class="fmz-gb-summary">
-          <b>Voyants d'attaque</b><br>
-          <span style="color:#4ade80;font-weight:800">● Vert :</span> cible à portée maintenant et encore attaquable à ton arrivée, après les mouvements connus.<br>
-          <span style="color:#f87171;font-weight:800">● Rouge :</span> hors de portée actuellement ou risque d'échec à ton arrivée.<br>
-          <span style="color:#94a3b8;font-weight:800">● Gris :</span> données insuffisantes pour vérifier.
-        </div>
-
-        ${renderSectionBlock(
-          "st_players",
-          `🎯 Sécurité des attaques · ${dashboardPlayers.length} joueurs`,
-          dashboardPlayers.length,
-          `<div class="fmz-gb-dashboard-grid">${dashboardPlayersHtml}</div>`,
-          "in",
-          false
-        )}
-
         ${renderSectionBlock(
           "st_ranking",
           `🏆 Classement TDC ${OWN_ALLIANCE_TAG}`,
@@ -3763,30 +3764,18 @@
 
   function buildAllianceBubbleHtml(devUser, now, collapsedMap) {
     const rawAttacks = getAllAllianceAttacks(now);
-    const incomingCount = rawAttacks.filter((a) => samePseudo(a.target, devUser)).length;
-    const outgoingCount = rawAttacks.filter((a) => samePseudo(a.attacker, devUser)).length;
     const filteredAttacks = rawAttacks
       .filter((a) => {
         if (allianceAttackFilter === "incoming") return samePseudo(a.target, devUser);
-        if (allianceAttackFilter === "outgoing") return samePseudo(a.attacker, devUser);
         return true;
       })
-      .sort((a, b) => {
-        if (allianceAttackSort === "tdc") {
-          const evA = getAttackEvaluation(a);
-          const evB = getAttackEvaluation(b);
-          const impactA = evA.willFail ? 0 : (evA.taken || 0);
-          const impactB = evB.willFail ? 0 : (evB.taken || 0);
-          if (impactB !== impactA) return impactB - impactA;
-        }
-        return Number(a.arrivalAt || 0) - Number(b.arrivalAt || 0);
-      });
+      .sort((a, b) => Number(a.arrivalAt || 0) - Number(b.arrivalAt || 0));
 
     const hasUrgent = filteredAttacks.some((a) => (Number(a.arrivalAt || 0) - now) <= 30 * 60 * 1000);
     const outOfRangeCount = filteredAttacks.filter((a) => getAttackTdcSummary(a).willFail).length;
 
     const summaryLine = filteredAttacks.length
-      ? `<div class="fmz-gb-summary">⚔️ <b>${filteredAttacks.length}</b> attaque(s) affichée(s) · <b>${incomingCount}</b> sur moi · <b>${outgoingCount}</b> lancées${outOfRangeCount > 0 ? ` · <span style="color:#fbbf24;font-weight:700">${outOfRangeCount} hors plage</span>` : ""}</div>`
+      ? `<div class="fmz-gb-summary">⚔️ <b>${filteredAttacks.length}</b> attaque(s) affichée(s)${outOfRangeCount > 0 ? ` · <span style="color:#fbbf24;font-weight:700">${outOfRangeCount} hors plage</span>` : ""}</div>`
       : "";
 
     const attacksListHtml = !filteredAttacks.length
@@ -3800,10 +3789,12 @@
             const isMeTarget = samePseudo(a.target, devUser);
             const isMeAttacker = samePseudo(a.attacker, devUser);
 
-            const atkLabel = isMeAttacker ? `${esc(a.attacker || "Moi")} (moi)` : esc(a.attacker || "Inconnu");
+            const atkClean = playerDisplayName(a.attacker || "Inconnu");
+            const defClean = playerDisplayName(a.target || "?");
+            const atkLabel = esc(atkClean);
             const defLabel = isMeTarget
-              ? `<span style="color:#fca5a5;font-weight:700">${esc(a.target || "?")} (moi)</span>`
-              : `<b>${esc(a.target || "?")}</b>`;
+              ? `<span style="color:#fca5a5;font-weight:700">${esc(defClean)}</span>`
+              : `<b>${esc(defClean)}</b>`;
 
             const sentAnts = getAttackSentAnts(a);
             const atkTdc = getAttackerTdcSummary(a);
@@ -3818,12 +3809,12 @@
             if (atkTdc.hasTdc) {
               const atkAfter = !willFail && atkTdc.taken > 0 ? atkTdc.afterTdc : atkTdc.beforeTdc;
               const atkDelta = !willFail && atkTdc.taken > 0 ? atkTdc.taken : 0;
-              badges.push(formatTdcChangeBadge(isMeAttacker ? "Moi" : a.attacker || "Attaquant", atkTdc.beforeTdc, atkAfter, atkDelta));
+              badges.push(formatTdcChangeBadge(atkClean, atkTdc.beforeTdc, atkAfter, atkDelta));
             }
             if (defTdc.hasTdc) {
               const defAfter = !willFail && defTdc.taken > 0 ? defTdc.afterTdc : defTdc.beforeTdc;
               const defDelta = !willFail && defTdc.taken > 0 ? -defTdc.taken : 0;
-              badges.push(formatTdcChangeBadge(isMeTarget ? "Moi" : a.target || "Cible", defTdc.beforeTdc, defAfter, defDelta));
+              badges.push(formatTdcChangeBadge(defClean, defTdc.beforeTdc, defAfter, defDelta));
             }
 
             const tdcBlock = badges.length
@@ -3872,14 +3863,7 @@
         ${summaryLine}
 
         <div class="fmz-gb-filters">
-          <button class="fmz-gb-filter-btn ${allianceAttackFilter === "all" ? "active" : ""}" data-al-filter="all" type="button">Tout (${rawAttacks.length})</button>
-          <button class="fmz-gb-filter-btn ${allianceAttackFilter === "incoming" ? "active" : ""}" data-al-filter="incoming" type="button">Sur moi (${incomingCount})</button>
-          <button class="fmz-gb-filter-btn ${allianceAttackFilter === "outgoing" ? "active" : ""}" data-al-filter="outgoing" type="button">Mes attaques (${outgoingCount})</button>
-        </div>
-
-        <div class="fmz-gb-filters">
-          <button class="fmz-gb-filter-btn ${allianceAttackSort === "time" ? "active" : ""}" data-al-sort="time" type="button">⏱️ Arrivée</button>
-          <button class="fmz-gb-filter-btn ${allianceAttackSort === "tdc" ? "active" : ""}" data-al-sort="tdc" type="button">📐 Plus gros impact</button>
+          <button class="fmz-gb-filter-btn ${allianceAttackFilter !== "incoming" ? "active" : ""}" data-al-filter="all" type="button">Tout (${rawAttacks.length})</button>
         </div>
 
         ${renderSectionBlock(
@@ -3893,7 +3877,6 @@
       </div>
     `;
   }
-
   function buildConvoyBubbleHtml(devUser, now, collapsedMap) {
     const activeRequests = convoyRequests.filter((r) => r.status !== "done");
     const openCount = activeRequests.length;
@@ -3951,7 +3934,7 @@
             return `
               <div class="fmz-gb-row" data-cv-card="${esc(r.id)}">
                 <div class="fmz-gb-row-top">
-                  <span><b>${esc(r.player)}</b> · 🪵 ${formatNumber(r.wood)} · 🍎 ${formatNumber(r.apples)}</span>
+                  <span><b>${esc(playerDisplayName(r.player))}</b> · 🪵 ${formatNumber(r.wood)} · 🍎 ${formatNumber(r.apples)}</span>
                 </div>
                 <div class="fmz-gb-tdc">${esc(statusText)}</div>
                 ${progHtml}
@@ -3973,7 +3956,7 @@
         return `
           <div class="fmz-gb-row">
             <div class="fmz-gb-row-top">
-              <span><b>${esc(r.player)}</b> · 🪵 ${formatNumber(r.wood)} · 🍎 ${formatNumber(r.apples)}</span>
+              <span><b>${esc(playerDisplayName(r.player))}</b> · 🪵 ${formatNumber(r.wood)} · 🍎 ${formatNumber(r.apples)}</span>
               ${cdHtml}
             </div>
           </div>
@@ -3985,8 +3968,8 @@
       .map((m) => {
         const arrAt = Number(m.arrivalAt || 0);
         const leftSec = Math.max(0, Math.ceil((arrAt - now) / 1000));
-        const fromName = (m.from && m.from.name) || m.createdBy || "Joueur";
-        const toName = (m.to && m.to.name) || "Destinataire";
+        const fromName = playerDisplayName((m.from && m.from.name) || m.createdBy || "Joueur");
+        const toName = playerDisplayName((m.to && m.to.name) || "Destinataire");
         return `
           <div class="fmz-gb-row">
             <div class="fmz-gb-row-top">
@@ -4029,7 +4012,7 @@
             return `
               <div class="fmz-gb-row">
                 <div class="fmz-gb-row-top">
-                  <span><b>${esc(item.from || "Joueur")} → ${esc(item.to || "Destinataire")}</b> · 🪵 ${formatNumber(item.wood)} · 🍎 ${formatNumber(item.apples)}</span>
+                  <span><b>${esc(playerDisplayName(item.from || "Joueur"))} → ${esc(playerDisplayName(item.to || "Destinataire"))}</b> · 🪵 ${formatNumber(item.wood)} · 🍎 ${formatNumber(item.apples)}</span>
                   <span class="fmz-gb-cd">${inTransit ? "En route" : "Livré"}</span>
                 </div>
               </div>
@@ -4090,6 +4073,7 @@
       </div>
     `;
   }
+
   function bindConvoyBubbleEvents(root) {
     root.querySelectorAll("[data-cv-df]").forEach((inp) => {
       inp.addEventListener("input", () => {
@@ -4158,10 +4142,6 @@
     });
   }
 
-  function playerDisplayName(raw) {
-    return String(raw || "").replace(/\s*\([^)]*\)\s*$/, "").trim();
-  }
-
   function getKnownPlayers(now) {
     const byKey = new Map();
     const tdcMap = readAllianceTdcMap();
@@ -4221,7 +4201,19 @@
     );
   }
 
-  function renderLevelGridHtml(entriesObj, emptyMsg, sourceUrl) {
+  function formatRemainingTimeBadge(info, now = Date.now()) {
+    if (!info) return "";
+    if (info.finishAt && Number(info.finishAt) > now) {
+      const leftSec = Math.max(0, Math.ceil((Number(info.finishAt) - now) / 1000));
+      return `<span class="fmz-gb-cd" data-cd="${info.finishAt}">${formatDuration(leftSec)}</span>`;
+    }
+    if (info.remainingText) {
+      return `<span class="fmz-gb-cd">${esc(info.remainingText)}</span>`;
+    }
+    return "";
+  }
+
+  function renderLevelGridHtml(entriesObj, emptyMsg, sourceUrl, now = Date.now()) {
     const entries = Object.entries(entriesObj || {}).sort((a, b) => a[0].localeCompare(b[0], "fr"));
     if (!entries.length) {
       return `<div class="fmz-gb-empty">${esc(emptyMsg)} · <a class="fmz-gb-link" href="${esc(sourceUrl)}">Ouvrir la page</a></div>`;
@@ -4232,15 +4224,62 @@
           .map(([name, info]) => {
             const lvl = info && info.level != null ? info.level : 0;
             const target = info && info.targetLevel != null ? info.targetLevel : null;
+            const remBadge = target != null ? formatRemainingTimeBadge(info, now) : "";
             return `
               <div class="fmz-gb-lvl-card">
                 <div class="fmz-gb-lvl-name">${esc(name)}</div>
                 <div class="fmz-gb-lvl-val">Niveau ${esc(lvl)}</div>
-                ${target != null ? `<div class="fmz-gb-lvl-prog">En cours → niv. ${esc(target)}</div>` : ""}
+                ${target != null ? `<div class="fmz-gb-lvl-prog">En cours → niv. ${esc(target)}${remBadge ? ` · ${remBadge}` : ""}</div>` : ""}
               </div>
             `;
           })
           .join("")}
+      </div>
+    `;
+  }
+
+  function buildBuildingHubHtml(devUser, now) {
+    const profile = getPlayerProfile(devUser);
+    const vaVal = getPlayerAttackSpeed(devUser);
+    const bCount = Object.keys(profile.buildings || {}).length;
+    const lCount = Object.keys(profile.lab || {}).length;
+
+    const contentHtml =
+      buildingHubTab === "lab"
+        ? `
+          <div class="fmz-gb-summary">
+            🔬 <b>Laboratoire · ${esc(devUser)}</b> · Import auto depuis <a class="fmz-gb-link" href="/laboratoire.php">laboratoire.php</a> · VA : <b>${vaVal != null ? `niv. ${esc(vaVal)}` : "?"}</b>.
+          </div>
+          ${renderLevelGridHtml(profile.lab, "Aucune recherche importée", "/laboratoire.php", now)}
+        `
+        : `
+          <div class="fmz-gb-summary">
+            🏗️ <b>Bâtiments · ${esc(devUser)}</b> · Import auto depuis <a class="fmz-gb-link" href="/construction.php">construction.php</a>.
+          </div>
+          ${renderLevelGridHtml(profile.buildings, "Aucun bâtiment importé", "/construction.php", now)}
+        `;
+
+    return `
+      <div id="fmz-gb-card">
+        <div class="fmz-gb-head">
+          <b>🏗️ Bâtiment · ${esc(devUser)}</b>
+          <div class="fmz-gb-head-actions">
+            <button id="fmz-gb-refresh" class="fmz-gb-btn" type="button" title="Rafraîchir maintenant">🔄</button>
+            <button id="fmz-gb-pl-list-close" class="fmz-gb-btn" type="button" title="Réduire">_</button>
+          </div>
+        </div>
+
+        <div class="fmz-gb-status-bar">
+          ${renderSyncStatusHtml()}
+          <a class="fmz-gb-link" href="${buildingHubTab === "lab" ? "/laboratoire.php" : "/construction.php"}">${buildingHubTab === "lab" ? "Page Laboratoire" : "Page Bâtiments"}</a>
+        </div>
+
+        <div class="fmz-gb-tabs">
+          <button class="fmz-gb-tab ${buildingHubTab !== "lab" ? "active" : ""}" data-bh-tab="buildings" type="button">🏗️ Bâtiments (${bCount})</button>
+          <button class="fmz-gb-tab ${buildingHubTab === "lab" ? "active" : ""}" data-bh-tab="lab" type="button">🔬 Laboratoire (${lCount})</button>
+        </div>
+
+        ${contentHtml}
       </div>
     `;
   }
@@ -4251,208 +4290,164 @@
     const selected = selectedPlayerKey ? players.find((p) => p.key === selectedPlayerKey) : null;
 
     if (!selected) {
-      const listHtml = !players.length
-        ? `<div class="fmz-gb-empty">Aucun joueur ${OWN_ALLIANCE_TAG} enregistré (ouvre la page Membres).</div>`
-        : players
-            .map((p) => {
-              const isMe = p.key === meKey;
-              const tdcTxt = p.tdc ? `${formatNumber(p.tdc)} cm²` : "TDC ?";
-              const metaBits = [];
-              if (p.count > 0) metaBits.push(`⚔️${p.count}`);
-              if (p.hunts > 0) metaBits.push(`🏹${p.hunts}`);
-              const rightMeta = metaBits.length
-                ? `<span class="fmz-gb-badge ${p.count > 0 ? "alert" : ""}">${metaBits.join(" ")}</span>`
-                : "";
-              return `
-                <button class="fmz-gb-player ${isMe ? "me" : ""} ${p.count > 0 ? "attacked" : ""}" data-pl-select="${esc(p.key)}" type="button">
-                  <span class="fmz-gb-player-main">
-                    <b>${esc(p.name)}</b>
-                    <span class="fmz-gb-player-tdc">${esc(tdcTxt)}</span>
-                  </span>
-                  <span class="fmz-gb-player-side">
-                    ${rightMeta}
-                  </span>
-                </button>
-              `;
-            })
-            .join("");
-
-      return `
-        <div id="fmz-gb-card">
-          <div class="fmz-gb-head">
-            <b>🏗️ Bâtiments · Joueurs ${OWN_ALLIANCE_TAG} (${players.length})</b>
-            <div class="fmz-gb-head-actions">
-              <button id="fmz-gb-refresh" class="fmz-gb-btn" type="button" title="Rafraîchir maintenant">🔄</button>
-              <button id="fmz-gb-pl-list-close" class="fmz-gb-btn" type="button" title="Réduire">_</button>
-            </div>
-          </div>
-
-          <div class="fmz-gb-status-bar">
-            ${renderSyncStatusHtml()}
-            <a class="fmz-gb-link" href="${esc(SHORTCUT_LINKS.membersUrl)}">📋 Membres (TDC)</a>
-          </div>
-
-          <div class="fmz-gb-player-list">${listHtml}</div>
-        </div>
-      `;
+      return buildBuildingHubHtml(devUser, now);
     }
 
-    if (selected) {
-      const attacks = getAllAllianceAttacks(now).filter((a) => normalizePseudo(a.target) === selected.key);
-      const hunts = getAllActiveHunts(now).filter((h) => normalizePseudo(h.player) === selected.key);
-      const playerConvoys = getConvoySummaryForUser(selected.name, now);
-      const sim = getTdcChains();
-      const currentTdc = getPlayerTdc(selected.name);
-      const projected = sim.finalTdc && sim.finalTdc.has(selected.key) ? sim.finalTdc.get(selected.key) : null;
-      const profile = getPlayerProfile(selected.name);
-      const vaVal = getPlayerAttackSpeed(selected.name);
-      const atkEval = selected.attackEval || evaluateTargetAttackability(selected.name, devUser, now);
-      const isMe = selected.key === meKey;
+    const attacks = getAllAllianceAttacks(now).filter((a) => normalizePseudo(a.target) === selected.key);
+    const hunts = getAllActiveHunts(now).filter((h) => normalizePseudo(h.player) === selected.key);
+    const playerConvoys = getConvoySummaryForUser(selected.name, now);
+    const sim = getTdcChains();
+    const currentTdc = getPlayerTdc(selected.name);
+    const projected = sim.finalTdc && sim.finalTdc.has(selected.key) ? sim.finalTdc.get(selected.key) : null;
+    const profile = getPlayerProfile(selected.name);
+    const vaVal = getPlayerAttackSpeed(selected.name);
+    const atkEval = selected.attackEval || evaluateTargetAttackability(selected.name, devUser, now);
+    const isMe = selected.key === meKey;
 
-      let totalTaken = 0;
-      attacks.forEach((a) => {
-        const ch = sim.attacks.get(String(a.sig || a.id));
-        if (ch && !ch.willFail) {
-          totalTaken += ch.taken || 0;
-        }
-      });
+    let totalTaken = 0;
+    attacks.forEach((a) => {
+      const ch = sim.attacks.get(String(a.sig || a.id));
+      if (ch && !ch.willFail) {
+        totalTaken += ch.taken || 0;
+      }
+    });
 
-      const attackStatusBadge = "";
-      const arrivalInfoHtml = !isMe
-        ? `<div style="margin-top:5px">🚀 Trajet estimé : <b>${atkEval.travelSec != null ? formatDuration(atkEval.travelSec) : "indisponible"}</b>${atkEval.distance != null ? ` · Distance : <b>${atkEval.distance.toFixed(2)}</b>` : ""}${atkEval.arrivalAt ? ` · Arrivée : <b>${new Date(atkEval.arrivalAt).toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" })}</b>` : ""}<br>📊 TDC estimés à l'arrivée : <b>${atkEval.arrivalTargetTdc != null ? formatNumber(atkEval.arrivalTargetTdc) : "?"}</b> vs <b>${atkEval.arrivalAttackerTdc != null ? formatNumber(atkEval.arrivalAttackerTdc) : "?"}</b> cm² (${atkEval.arrivalRatioPct != null ? `${atkEval.arrivalRatioPct}%` : "ratio inconnu"})</div>`
-        : "";
+    const attackStatusBadge = "";
+    const arrivalInfoHtml = !isMe
+      ? `<div style="margin-top:5px">🚀 Trajet estimé : <b>${atkEval.travelSec != null ? formatDuration(atkEval.travelSec) : "indisponible"}</b>${atkEval.distance != null ? ` · Distance : <b>${atkEval.distance.toFixed(2)}</b>` : ""}${atkEval.arrivalAt ? ` · Arrivée : <b>${new Date(atkEval.arrivalAt).toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" })}</b>` : ""}<br>📊 TDC estimés à l'arrivée : <b>${atkEval.arrivalTargetTdc != null ? formatNumber(atkEval.arrivalTargetTdc) : "?"}</b> vs <b>${atkEval.arrivalAttackerTdc != null ? formatNumber(atkEval.arrivalAttackerTdc) : "?"}</b> cm² (${atkEval.arrivalRatioPct != null ? `${atkEval.arrivalRatioPct}%` : "ratio inconnu"})</div>`
+      : "";
 
-      const tdcBadgeHtml = currentTdc
-        ? formatTdcChangeBadge(
-            "TDC",
-            currentTdc,
-            projected != null ? projected : currentTdc,
-            projected != null ? (projected - currentTdc) : 0
-          )
-        : `<span class="fmz-gb-tdc-delta fmz-gb-tdc-flat">TDC : inconnu</span>`;
+    const tdcBadgeHtml = currentTdc
+      ? formatTdcChangeBadge(
+          "TDC",
+          currentTdc,
+          projected != null ? projected : currentTdc,
+          projected != null ? (projected - currentTdc) : 0
+        )
+      : `<span class="fmz-gb-tdc-delta fmz-gb-tdc-flat">TDC : inconnu</span>`;
 
-      const overviewTabHtml = `
-        <div class="fmz-gb-summary">
-          <div style="display:flex;justify-content:space-between;align-items:center;gap:6px;margin-bottom:6px">
-            <b>🎯 Règle 50%–300% (vs ${esc(devUser)})</b>
-            <div style="display:flex;flex-wrap:wrap;gap:5px;justify-content:flex-end">${attackStatusBadge}</div>
-          </div>
-          <div>${esc(atkEval.safeReason || atkEval.reason)}</div>
-          ${arrivalInfoHtml}
-          <div class="fmz-gb-tdc-line">${tdcBadgeHtml}</div>
-          <div style="margin-top:6px">
-            ⚡ Vitesse d'attaque (VA) : <b>${vaVal != null ? `niveau ${esc(vaVal)}` : "non renseignée"}</b><br>
-            ⚔️ Attaques sur lui : <b>${attacks.length}</b> · 📉 Pris max : <b>${formatNumber(totalTaken)} cm²</b> · 🏹 Chasses : <b>${hunts.length}</b><br>
-            🚚 Convois entrants : <b>${playerConvoys.incoming.length}</b> · sortants : <b>${playerConvoys.outgoing.length}</b>
-          </div>
+    const overviewTabHtml = `
+      <div class="fmz-gb-summary">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:6px;margin-bottom:6px">
+          <b>🎯 Règle 50%–300% (vs ${esc(devUser)})</b>
+          <div style="display:flex;flex-wrap:wrap;gap:5px;justify-content:flex-end">${attackStatusBadge}</div>
         </div>
-        ${renderSectionBlock(
-          "pl_attacks",
-          "⚔️ Attaques en cours sur ce joueur",
-          attacks.length,
-          !attacks.length
-            ? `<div class="fmz-gb-empty">Aucune attaque en cours sur ${esc(selected.name)}.</div>`
-            : attacks
-                .map((a) => {
-                  const leftSec = Math.max(0, Math.ceil((Number(a.arrivalAt || 0) - now) / 1000));
-                  const isCritical = leftSec <= 15 * 60;
-                  const isWarn = leftSec <= 30 * 60;
-                  const urgencyClass = isCritical ? "critical" : isWarn ? "warn" : "";
-                  const sentAnts = getAttackSentAnts(a);
-                  const defTdc = getAttackTdcSummary(a);
-                  const atkTdc = getAttackerTdcSummary(a);
-                  const willFail = defTdc.willFail;
-                  const arrivalTxt = a.arrivalLabel
-                    ? esc(a.arrivalLabel)
-                    : new Date(Number(a.arrivalAt || now)).toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" });
-                  const badges = [];
-                  if (defTdc.hasTdc) {
-                    const defAfter = !willFail && defTdc.taken > 0 ? defTdc.afterTdc : defTdc.beforeTdc;
-                    const defDelta = !willFail && defTdc.taken > 0 ? -defTdc.taken : 0;
-                    badges.push(formatTdcChangeBadge(selected.name, defTdc.beforeTdc, defAfter, defDelta));
-                  }
-                  if (atkTdc.hasTdc) {
-                    const atkAfter = !willFail && atkTdc.taken > 0 ? atkTdc.afterTdc : atkTdc.beforeTdc;
-                    const atkDelta = !willFail && atkTdc.taken > 0 ? atkTdc.taken : 0;
-                    badges.push(formatTdcChangeBadge(a.attacker || "Attaquant", atkTdc.beforeTdc, atkAfter, atkDelta));
-                  }
-                  return `
-                    <div class="fmz-gb-row ${isWarn ? "soon" : ""} ${willFail ? "will-fail" : ""}">
-                      <div class="fmz-gb-row-top">
-                        <span>${willFail ? "⚠️" : isCritical ? "🚨" : "⚔️"} <b>${esc(a.attacker || "Inconnu")}</b></span>
-                        <span class="fmz-gb-cd ${urgencyClass}" data-cd="${a.arrivalAt}">${formatDuration(leftSec)}</span>
-                      </div>
-                      <div class="fmz-gb-sub">🕒 ${arrivalTxt} · ${sentAnts > 0 ? `🐜 ${formatNumber(sentAnts)}` : "🐜 effectif ?"}</div>
-                      ${badges.length ? `<div class="fmz-gb-tdc-line">${badges.join("")}</div>` : ""}
-                      ${willFail ? `<div class="fmz-gb-fail">⚠️ ${esc(defTdc.failReason)}</div>` : ""}
+        <div>${esc(atkEval.safeReason || atkEval.reason)}</div>
+        ${arrivalInfoHtml}
+        <div class="fmz-gb-tdc-line">${tdcBadgeHtml}</div>
+        <div style="margin-top:6px">
+          ⚡ Vitesse d'attaque (VA) : <b>${vaVal != null ? `niveau ${esc(vaVal)}` : "non renseignée"}</b><br>
+          ⚔️ Attaques sur lui : <b>${attacks.length}</b> · 📉 Pris max : <b>${formatNumber(totalTaken)} cm²</b> · 🏹 Chasses : <b>${hunts.length}</b><br>
+          🚚 Convois entrants : <b>${playerConvoys.incoming.length}</b> · sortants : <b>${playerConvoys.outgoing.length}</b>
+        </div>
+      </div>
+      ${renderSectionBlock(
+        "pl_attacks",
+        "⚔️ Attaques en cours sur ce joueur",
+        attacks.length,
+        !attacks.length
+          ? `<div class="fmz-gb-empty">Aucune attaque en cours sur ${esc(selected.name)}.</div>`
+          : attacks
+              .map((a) => {
+                const leftSec = Math.max(0, Math.ceil((Number(a.arrivalAt || 0) - now) / 1000));
+                const isCritical = leftSec <= 15 * 60;
+                const isWarn = leftSec <= 30 * 60;
+                const urgencyClass = isCritical ? "critical" : isWarn ? "warn" : "";
+                const sentAnts = getAttackSentAnts(a);
+                const defTdc = getAttackTdcSummary(a);
+                const atkTdc = getAttackerTdcSummary(a);
+                const willFail = defTdc.willFail;
+                const arrivalTxt = a.arrivalLabel
+                  ? esc(a.arrivalLabel)
+                  : new Date(Number(a.arrivalAt || now)).toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" });
+                const badges = [];
+                if (defTdc.hasTdc) {
+                  const defAfter = !willFail && defTdc.taken > 0 ? defTdc.afterTdc : defTdc.beforeTdc;
+                  const defDelta = !willFail && defTdc.taken > 0 ? -defTdc.taken : 0;
+                  badges.push(formatTdcChangeBadge(selected.name, defTdc.beforeTdc, defAfter, defDelta));
+                }
+                if (atkTdc.hasTdc) {
+                  const atkAfter = !willFail && atkTdc.taken > 0 ? atkTdc.afterTdc : atkTdc.beforeTdc;
+                  const atkDelta = !willFail && atkTdc.taken > 0 ? atkTdc.taken : 0;
+                  badges.push(formatTdcChangeBadge(playerDisplayName(a.attacker || "Attaquant"), atkTdc.beforeTdc, atkAfter, atkDelta));
+                }
+                return `
+                  <div class="fmz-gb-row ${isWarn ? "soon" : ""} ${willFail ? "will-fail" : ""}">
+                    <div class="fmz-gb-row-top">
+                      <span>${willFail ? "⚠️" : isCritical ? "🚨" : "⚔️"} <b>${esc(playerDisplayName(a.attacker || "Inconnu"))}</b></span>
+                      <span class="fmz-gb-cd ${urgencyClass}" data-cd="${a.arrivalAt}">${formatDuration(leftSec)}</span>
                     </div>
-                  `;
-                })
-                .join(""),
-          `danger ${attacks.some((a) => (Number(a.arrivalAt || 0) - now) <= 30 * 60 * 1000) ? "urgent" : ""}`,
-          !!collapsedMap.pl_attacks
-        )}
-        ${renderSectionBlock(
-          "pl_hunts",
-          "🏹 Chasses en cours",
-          hunts.length,
-          !hunts.length
-            ? `<div class="fmz-gb-empty">Aucune chasse en cours.</div>`
-            : hunts
-                .slice()
-                .sort((x, y) => Number(x.arrivalAt || 0) - Number(y.arrivalAt || 0))
-                .map((h) => {
-                  const leftSec = Math.max(0, Math.ceil((Number(h.arrivalAt || 0) - now) / 1000));
-                  const tdcInfo = getHuntTdcSummary(h);
-                  return `
-                    <div class="fmz-gb-row">
-                      <div class="fmz-gb-row-top">
-                        <span>🏹 <b>${esc(selected.name)}</b>${h.area ? ` · +${formatNumber(h.area)} cm²` : ""}</span>
-                        <span class="fmz-gb-cd" data-cd="${h.arrivalAt}">${formatDuration(leftSec)}</span>
-                      </div>
-                      ${
-                        tdcInfo.hasTdc
-                          ? `<div class="fmz-gb-tdc-line">${formatTdcChangeBadge("TDC", tdcInfo.beforeTdc, tdcInfo.afterTdc, tdcInfo.gainedTdc)}</div>`
-                          : `<div class="fmz-gb-sub">TDC inconnu</div>`
-                      }
+                    <div class="fmz-gb-sub">🕒 ${arrivalTxt} · ${sentAnts > 0 ? `🐜 ${formatNumber(sentAnts)}` : "🐜 effectif ?"}</div>
+                    ${badges.length ? `<div class="fmz-gb-tdc-line">${badges.join("")}</div>` : ""}
+                    ${willFail ? `<div class="fmz-gb-fail">⚠️ ${esc(defTdc.failReason)}</div>` : ""}
+                  </div>
+                `;
+              })
+              .join(""),
+        `danger ${attacks.some((a) => (Number(a.arrivalAt || 0) - now) <= 30 * 60 * 1000) ? "urgent" : ""}`,
+        !!collapsedMap.pl_attacks
+      )}
+      ${renderSectionBlock(
+        "pl_hunts",
+        "🏹 Chasses en cours",
+        hunts.length,
+        !hunts.length
+          ? `<div class="fmz-gb-empty">Aucune chasse en cours.</div>`
+          : hunts
+              .slice()
+              .sort((x, y) => Number(x.arrivalAt || 0) - Number(y.arrivalAt || 0))
+              .map((h) => {
+                const leftSec = Math.max(0, Math.ceil((Number(h.arrivalAt || 0) - now) / 1000));
+                const tdcInfo = getHuntTdcSummary(h);
+                return `
+                  <div class="fmz-gb-row">
+                    <div class="fmz-gb-row-top">
+                      <span>🏹 <b>${esc(selected.name)}</b>${h.area ? ` · +${formatNumber(h.area)} cm²` : ""}</span>
+                      <span class="fmz-gb-cd" data-cd="${h.arrivalAt}">${formatDuration(leftSec)}</span>
                     </div>
-                  `;
-                })
-                .join(""),
-          "hunt",
-          !!collapsedMap.pl_hunts
-        )}
-        ${renderSectionBlock(
-          "pl_convoy_in",
-          "📥 Convois entrants",
-          playerConvoys.incoming.length,
-          !playerConvoys.incoming.length
-            ? `<div class="fmz-gb-empty">Aucun convoi entrant.</div>`
-            : playerConvoys.incoming
-                .map((c) => {
-                  const leftSec = Math.max(0, Math.ceil((c.arrivalAt - now) / 1000));
-                  return `<div class="fmz-gb-row"><div class="fmz-gb-row-top"><span>De <b>${esc(c.fromName)}</b> · 🪵 ${formatNumber(c.wood)} · 🍎 ${formatNumber(c.apples)}</span><span class="fmz-gb-cd" data-cd="${c.arrivalAt}">${formatDuration(leftSec)}</span></div></div>`;
-                })
-                .join(""),
-          "in",
-          !!collapsedMap.pl_convoy_in
-        )}
-        ${renderSectionBlock(
-          "pl_convoy_out",
-          "📤 Convois sortants",
-          playerConvoys.outgoing.length,
-          !playerConvoys.outgoing.length
-            ? `<div class="fmz-gb-empty">Aucun convoi sortant.</div>`
-            : playerConvoys.outgoing
-                .map((c) => {
-                  const leftSec = Math.max(0, Math.ceil((c.arrivalAt - now) / 1000));
-                  return `<div class="fmz-gb-row"><div class="fmz-gb-row-top"><span>Vers <b>${esc(c.toName)}</b> · 🪵 ${formatNumber(c.wood)} · 🍎 ${formatNumber(c.apples)}</span><span class="fmz-gb-cd" data-cd="${c.arrivalAt}">${formatDuration(leftSec)}</span></div></div>`;
-                })
-                .join(""),
-          "out",
-          !!collapsedMap.pl_convoy_out
-        )}
-      `;
+                    ${
+                      tdcInfo.hasTdc
+                        ? `<div class="fmz-gb-tdc-line">${formatTdcChangeBadge("TDC", tdcInfo.beforeTdc, tdcInfo.afterTdc, tdcInfo.gainedTdc)}</div>`
+                        : `<div class="fmz-gb-sub">TDC inconnu</div>`
+                    }
+                  </div>
+                `;
+              })
+              .join(""),
+        "hunt",
+        !!collapsedMap.pl_hunts
+      )}
+      ${renderSectionBlock(
+        "pl_convoy_in",
+        "📥 Convois entrants",
+        playerConvoys.incoming.length,
+        !playerConvoys.incoming.length
+          ? `<div class="fmz-gb-empty">Aucun convoi entrant.</div>`
+          : playerConvoys.incoming
+              .map((c) => {
+                const leftSec = Math.max(0, Math.ceil((c.arrivalAt - now) / 1000));
+                return `<div class="fmz-gb-row"><div class="fmz-gb-row-top"><span>De <b>${esc(c.fromName)}</b> · 🪵 ${formatNumber(c.wood)} · 🍎 ${formatNumber(c.apples)}</span><span class="fmz-gb-cd" data-cd="${c.arrivalAt}">${formatDuration(leftSec)}</span></div></div>`;
+              })
+              .join(""),
+        "in",
+        !!collapsedMap.pl_convoy_in
+      )}
+      ${renderSectionBlock(
+        "pl_convoy_out",
+        "📤 Convois sortants",
+        playerConvoys.outgoing.length,
+        !playerConvoys.outgoing.length
+          ? `<div class="fmz-gb-empty">Aucun convoi sortant.</div>`
+          : playerConvoys.outgoing
+              .map((c) => {
+                const leftSec = Math.max(0, Math.ceil((c.arrivalAt - now) / 1000));
+                return `<div class="fmz-gb-row"><div class="fmz-gb-row-top"><span>Vers <b>${esc(c.toName)}</b> · 🪵 ${formatNumber(c.wood)} · 🍎 ${formatNumber(c.apples)}</span><span class="fmz-gb-cd" data-cd="${c.arrivalAt}">${formatDuration(leftSec)}</span></div></div>`;
+              })
+              .join(""),
+        "out",
+        !!collapsedMap.pl_convoy_out
+      )}
+    `;
 
     const buildingsTabHtml = `
       <div class="fmz-gb-summary">
@@ -4461,7 +4456,8 @@
       ${renderLevelGridHtml(
         profile.buildings,
         "Aucun bâtiment importé pour ce joueur",
-        "/construction.php"
+        "/construction.php",
+        now
       )}
     `;
 
@@ -4472,7 +4468,8 @@
       ${renderLevelGridHtml(
         profile.lab,
         "Aucune recherche importée pour ce joueur",
-        "/laboratoire.php"
+        "/laboratoire.php",
+        now
       )}
     `;
 
@@ -4485,11 +4482,10 @@
       <div id="fmz-gb-card" class="fmz-player-page">
         <div class="fmz-gb-head">
           <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
-            <b>👤 Page joueur · ${esc(selected.name)}${isMe ? " (moi)" : ""}</b>
+            <b>👤 Page joueur · ${esc(selected.name)}</b>
             ${attackStatusBadge}
           </div>
           <div class="fmz-gb-head-actions">
-            <button id="fmz-gb-pl-back" class="fmz-gb-btn" type="button">← Retour</button>
             <button id="fmz-gb-refresh" class="fmz-gb-btn" type="button" title="Rafraîchir maintenant">🔄</button>
             <button id="fmz-gb-pl-close" class="fmz-gb-btn" type="button" title="Fermer">✕</button>
           </div>
@@ -4509,9 +4505,6 @@
         ${activeTabContent}
       </div>
     `;
-    }
-
-    return "";
   }
 
   function renderGlobalBubble(forceRender = false) {
@@ -4522,6 +4515,7 @@
     const devUser = getDevUser();
     const locked = isSessionLocked();
     const incomingAttacks = getIncomingAttacksForCurrentUser();
+    const outgoingAttacks = getOutgoingAttacksForCurrentUser(now);
     const allAllianceAttacks = getAllAllianceAttacks(now);
     const convoys = getConvoySummaryForUser(devUser, now);
     const allHunts = getAllActiveHunts(now);
@@ -4592,11 +4586,13 @@
       allianceAttackSort,
       selectedPlayerKey,
       selectedPlayerTab,
+      buildingHubTab,
       JSON.stringify(collapsedMap),
       lastCommerceMessage,
       IS_ATTACK_PAGE || IS_COMMERCE ? 1 : 0,
       allHunts.map((h) => `${h.sig}:${h.area}:${Math.floor((h.arrivalAt - now) / 15000)}`).join(";"),
       incomingAttacks.map((a) => `${a.sig}:${Math.floor((a.arrivalAt - now) / 15000)}`).join(";"),
+      outgoingAttacks.map((a) => `${a.sig}:${Math.floor((a.arrivalAt - now) / 15000)}`).join(";"),
       allAllianceAttacks.map((a) => `${a.sig}:${a.ants}:${Math.floor((a.arrivalAt - now) / 15000)}`).join(";"),
       convoys.incoming.map((c) => `${c.id}:${c.wood}:${c.apples}`).join(";"),
       convoys.outgoing.map((c) => `${c.id}:${c.wood}:${c.apples}`).join(";"),
@@ -4636,6 +4632,7 @@
     const hasImminentAttack = incomingAttacks.some((a) => (Number(a.arrivalAt || 0) - now) <= 30 * 60 * 1000);
     const totalEvents =
       incomingAttacks.length +
+      outgoingAttacks.length +
       convoys.incoming.length +
       allHunts.length +
       convoys.outgoing.length;
@@ -4668,7 +4665,7 @@
               return `
                 <div class="fmz-gb-row">
                   <div class="fmz-gb-row-top">
-                    <span><b>${esc(h.player || "Joueur")}</b>${areaLabel}</span>
+                    <span><b>${esc(playerDisplayName(h.player || "Joueur"))}</b>${areaLabel}</span>
                     <span class="fmz-gb-cd" data-cd="${h.arrivalAt}">${formatDuration(leftSec)}</span>
                   </div>
                   ${tdcSub}
@@ -4690,7 +4687,7 @@
               return `
                 <div class="fmz-gb-row">
                   <div class="fmz-gb-row-top">
-                    <span><b>${esc(h.player || devUser)}</b> · <b>${areaTxt}</b></span>
+                    <span><b>${esc(playerDisplayName(h.player || devUser))}</b> · <b>${areaTxt}</b></span>
                     <span class="fmz-gb-cd">Terminée${durTxt}</span>
                   </div>
                 </div>
@@ -4710,16 +4707,18 @@
               const atkTdc = getAttackerTdcSummary(a);
               const sentAnts = getAttackSentAnts(a);
               const willFail = tdcInfo.willFail;
+              const atkClean = playerDisplayName(a.attacker || "Inconnu");
+              const defClean = playerDisplayName(a.target || devUser);
               const badges = [];
               if (tdcInfo.hasTdc) {
                 const defAfter = !willFail && tdcInfo.taken > 0 ? tdcInfo.afterTdc : tdcInfo.beforeTdc;
                 const defDelta = !willFail && tdcInfo.taken > 0 ? -tdcInfo.taken : 0;
-                badges.push(formatTdcChangeBadge("Moi", tdcInfo.beforeTdc, defAfter, defDelta));
+                badges.push(formatTdcChangeBadge(defClean, tdcInfo.beforeTdc, defAfter, defDelta));
               }
               if (atkTdc.hasTdc) {
                 const atkAfter = !willFail && atkTdc.taken > 0 ? atkTdc.afterTdc : atkTdc.beforeTdc;
                 const atkDelta = !willFail && atkTdc.taken > 0 ? atkTdc.taken : 0;
-                badges.push(formatTdcChangeBadge(a.attacker || "Attaquant", atkTdc.beforeTdc, atkAfter, atkDelta));
+                badges.push(formatTdcChangeBadge(atkClean, atkTdc.beforeTdc, atkAfter, atkDelta));
               }
               const antsPart = sentAnts > 0
                 ? `🐜 ${formatNumber(sentAnts)}`
@@ -4733,11 +4732,50 @@
               return `
                 <div class="fmz-gb-row ${isWarn ? "soon" : ""} targeted-me ${willFail ? "will-fail" : ""}">
                   <div class="fmz-gb-row-top">
-                    <b>${willFail ? "⚠️" : isCritical ? "🚨" : "🐎"} ${esc(a.attacker || "Inconnu")}</b>
+                    <b>${willFail ? "⚠️" : isCritical ? "🚨" : "🐎"} ${esc(atkClean)}</b>
                     <span class="fmz-gb-cd ${urgencyClass}" data-cd="${a.arrivalAt}">${formatDuration(leftSec)}</span>
                   </div>
                   ${tdcSub}
                   ${ruleLine}
+                </div>
+              `;
+            })
+            .join("");
+
+      const myOutgoingHtml = !outgoingAttacks.length
+        ? `<div class="fmz-gb-empty">Aucune attaque lancée en cours.</div>`
+        : outgoingAttacks
+            .map((a) => {
+              const leftSec = Math.max(0, Math.ceil((Number(a.arrivalAt || 0) - now) / 1000));
+              const isCritical = leftSec <= 15 * 60;
+              const isWarn = leftSec <= 30 * 60;
+              const urgencyClass = isCritical ? "critical" : isWarn ? "warn" : "";
+              const tdcInfo = getAttackTdcSummary(a);
+              const atkTdc = getAttackerTdcSummary(a);
+              const sentAnts = getAttackSentAnts(a);
+              const willFail = tdcInfo.willFail;
+              const atkClean = playerDisplayName(a.attacker || devUser);
+              const defClean = playerDisplayName(a.target || "?");
+              const badges = [];
+              if (atkTdc.hasTdc) {
+                const atkAfter = !willFail && atkTdc.taken > 0 ? atkTdc.afterTdc : atkTdc.beforeTdc;
+                const atkDelta = !willFail && atkTdc.taken > 0 ? atkTdc.taken : 0;
+                badges.push(formatTdcChangeBadge(atkClean, atkTdc.beforeTdc, atkAfter, atkDelta));
+              }
+              if (tdcInfo.hasTdc) {
+                const defAfter = !willFail && tdcInfo.taken > 0 ? tdcInfo.afterTdc : tdcInfo.beforeTdc;
+                const defDelta = !willFail && tdcInfo.taken > 0 ? -tdcInfo.taken : 0;
+                badges.push(formatTdcChangeBadge(defClean, tdcInfo.beforeTdc, defAfter, defDelta));
+              }
+              return `
+                <div class="fmz-gb-row ${isWarn ? "soon" : ""} ${willFail ? "will-fail" : ""}">
+                  <div class="fmz-gb-row-top">
+                    <span>${willFail ? "⚠️" : isCritical ? "🚨" : "⚔️"} <b>${esc(atkClean)}</b> → <b>${esc(defClean)}</b></span>
+                    <span class="fmz-gb-cd ${urgencyClass}" data-cd="${a.arrivalAt}">${formatDuration(leftSec)}</span>
+                  </div>
+                  <div class="fmz-gb-sub">${sentAnts > 0 ? `🐜 ${formatNumber(sentAnts)}` : "🐜 effectif ?"}${a.targetKind ? ` · ${esc(a.targetKind)}` : ""}</div>
+                  ${badges.length ? `<div class="fmz-gb-tdc-line">${badges.join("")}</div>` : ""}
+                  ${willFail ? `<div class="fmz-gb-fail">⚠️ ${esc(tdcInfo.failReason)}</div>` : ""}
                 </div>
               `;
             })
@@ -4831,6 +4869,15 @@
           )}
 
           ${renderSectionBlock(
+            "my_attacks",
+            "⚔️ Mes attaques",
+            outgoingAttacks.length,
+            myOutgoingHtml,
+            "out",
+            !!collapsedMap.my_attacks
+          )}
+
+          ${renderSectionBlock(
             "convoy_in",
             "📥 Convois qui arrivent sur moi",
             convoys.incoming.length,
@@ -4863,7 +4910,7 @@
     root.innerHTML = `
       ${cardHtml}
       <div class="fmz-gb-dock">
-        <button id="fmz-gb-players-fab" class="fmz-gb-fab players ${isPlayersOpen ? "active" : ""}" type="button" title="Bâtiments et fiches joueurs">
+        <button id="fmz-gb-players-fab" class="fmz-gb-fab players ${isPlayersOpen ? "active" : ""}" type="button" title="Bâtiments et Laboratoire">
           <span>🏗️ Bâtiment</span>
         </button>
         <button id="fmz-gb-alliance-fab" class="fmz-gb-fab alliance ${isAllianceOpen ? "active" : ""} ${allAllianceAttacks.length > 0 ? "alert" : ""}" type="button" title="Toutes les attaques de l'alliance">
@@ -4896,6 +4943,13 @@
       renderGlobalBubble(true);
     };
 
+    root.querySelectorAll("[data-bh-tab]").forEach((btn) => {
+      btn.onclick = () => {
+        buildingHubTab = btn.getAttribute("data-bh-tab") === "lab" ? "lab" : "buildings";
+        renderGlobalBubble(true);
+      };
+    });
+
     root.querySelectorAll("[data-dashboard-player]").forEach((btn) => {
       btn.onclick = () => {
         selectedPlayerKey = btn.getAttribute("data-dashboard-player") || "";
@@ -4906,29 +4960,12 @@
       };
     });
 
-    root.querySelectorAll("[data-pl-select]").forEach((btn) => {
-      btn.onclick = () => {
-        selectedPlayerKey = btn.getAttribute("data-pl-select") || "";
-        selectedPlayerTab = "overview";
-        renderGlobalBubble(true);
-      };
-    });
-
     root.querySelectorAll("[data-pl-tab]").forEach((btn) => {
       btn.onclick = () => {
         selectedPlayerTab = btn.getAttribute("data-pl-tab") || "overview";
         renderGlobalBubble(true);
       };
     });
-
-    const plBackBtn = root.querySelector("#fmz-gb-pl-back");
-    if (plBackBtn) {
-      plBackBtn.onclick = () => {
-        selectedPlayerKey = "";
-        selectedPlayerTab = "overview";
-        renderGlobalBubble(true);
-      };
-    }
 
     const closePlayersListBtn = root.querySelector("#fmz-gb-pl-list-close");
     if (closePlayersListBtn) {
