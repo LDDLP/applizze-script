@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Le Dôme De La Paix - Fourmizzz S5 (Ressources, Armee, Commerce & Alliance)
 // @namespace    https://s5.fourmizzz.fr/
-// @version      0.5.63-worker
+// @version      0.5.64-worker
 // @updateURL    https://raw.githubusercontent.com/LDDLP/applizze-script/main/fourmizzz.user.js
 // @downloadURL  https://raw.githubusercontent.com/LDDLP/applizze-script/main/fourmizzz.user.js
 // @description  Outils d'alliance centralisés sur S5 : chasses en tête du Dôme avec TDC + chassé, attaques compactes avec filtres et tri, TDC attaquant/cible en rouge/vert, règle 50%-300% / 20% max, convois, fiche joueur dédiée et import auto construction/laboratoire.
@@ -22,7 +22,7 @@
   const HOST = window.location.hostname.toLowerCase();
   if (HOST !== "s5.fourmizzz.fr") return;
 
-  const SCRIPT_VERSION = "0.5.63-worker";
+  const SCRIPT_VERSION = "0.5.64-worker";
 
   const PATH = window.location.pathname.toLowerCase();
   const HREF = window.location.href.toLowerCase();
@@ -335,6 +335,66 @@
     } catch (e) {}
   }
 
+  // Noms officiels : seuls ces noms sont acceptés, ce qui évite les doublons « sale » (coûts, durées, texte de la bulle).
+  const BUILDING_NAMES = [
+    "Caserne", "Champignonnière", "Couveuse", "Dôme", "Entrepôt de Matériaux", "Entrepôt de Nourriture",
+    "Etable à cochenilles", "Etable à pucerons", "Laboratoire", "Loge Impériale", "Salle d'analyse",
+    "Salle de combat", "Solarium"
+  ];
+  const LAB_NAMES = [
+    "Acide", "Architecture", "Armes", "Bouclier Thoracique", "Communication avec les animaux", "Génétique",
+    "Poison", "Technique de ponte", "Vitesse de chasse", "Vitesse d'attaque"
+  ];
+
+  function foldName(str) {
+    return String(str || "")
+      .toLowerCase()
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .replace(/[’`]/g, "'")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
+  // Le nom officiel est cherché en FIN de texte : « 1 280 000 Etable à pucerons » → « Etable à pucerons ».
+  function canonicalLevelName(raw, list) {
+    const f = foldName(raw);
+    if (!f) return null;
+    for (const name of list) {
+      const c = foldName(name);
+      if (f === c || f.endsWith(" " + c)) return name;
+    }
+    return null;
+  }
+
+  function cleanLevelMap(map, list) {
+    const out = {};
+    if (!map || typeof map !== "object") return out;
+    for (const [key, val] of Object.entries(map)) {
+      const name = canonicalLevelName(key, list);
+      if (!name || !val || !Number.isFinite(Number(val.level))) continue;
+      if (!out[name] || Number(val.updatedAt || 0) >= Number(out[name].updatedAt || 0)) {
+        out[name] = val;
+      }
+    }
+    return out;
+  }
+
+  function readPageTextWithoutOwnUi() {
+    const hidden = [];
+    document.querySelectorAll("#fmz-gb-root, #fmz-gb-left-dock").forEach((el) => {
+      hidden.push([el, el.style.display]);
+      el.style.display = "none";
+    });
+    try {
+      return document.body ? document.body.innerText || "" : "";
+    } finally {
+      hidden.forEach(([el, d]) => {
+        el.style.display = d;
+      });
+    }
+  }
+
   function getPlayerProfile(pseudo) {
     const norm = normalizePseudo(pseudo);
     if (!norm) {
@@ -351,8 +411,8 @@
     return {
       pseudo: cur.pseudo || playerDisplayName(pseudo),
       attackSpeed: cur.attackSpeed != null && Number.isFinite(Number(cur.attackSpeed)) ? Number(cur.attackSpeed) : null,
-      buildings: cur.buildings && typeof cur.buildings === "object" ? cur.buildings : {},
-      lab: cur.lab && typeof cur.lab === "object" ? cur.lab : {},
+      buildings: cleanLevelMap(cur.buildings, BUILDING_NAMES),
+      lab: cleanLevelMap(cur.lab, LAB_NAMES),
       updatedAt: Number(cur.updatedAt || 0)
     };
   }
@@ -378,14 +438,11 @@
         patch && patch.attackSpeed !== undefined
           ? (patch.attackSpeed != null && Number.isFinite(Number(patch.attackSpeed)) ? Number(patch.attackSpeed) : null)
           : prev.attackSpeed,
-      buildings: {
-        ...(prev.buildings || {}),
-        ...((patch && patch.buildings) || {})
-      },
-      lab: {
-        ...(prev.lab || {}),
-        ...((patch && patch.lab) || {})
-      },
+      buildings: cleanLevelMap(
+        { ...(prev.buildings || {}), ...((patch && patch.buildings) || {}) },
+        BUILDING_NAMES
+      ),
+      lab: cleanLevelMap({ ...(prev.lab || {}), ...((patch && patch.lab) || {}) }, LAB_NAMES),
       updatedAt: Date.now()
     };
 
@@ -1812,8 +1869,8 @@
             tdc: Math.floor(v.tdc),
             alliance: OWN_ALLIANCE_TAG,
             attackSpeed: prof.attackSpeed ?? null,
-            buildings: prof.buildings || {},
-            lab: prof.lab || {},
+            buildings: cleanLevelMap(prof.buildings, BUILDING_NAMES),
+            lab: cleanLevelMap(prof.lab, LAB_NAMES),
             updatedAt: prof.updatedAt || now
           };
         });
@@ -1843,7 +1900,7 @@
 
   function scrapeConstructionPage(forceScan = false) {
     if (!IS_CONSTRUCTION || !document.body) return 0;
-    const text = document.body.innerText || "";
+    const text = readPageTextWithoutOwnUi();
     const sig = text.replace(/\s+/g, " ").trim();
     if (!forceScan && sig && sig === lastConstructionSig) return 0;
     lastConstructionSig = sig;
@@ -1857,10 +1914,9 @@
         entry = parseLevelEntryFromLine(`${lines[i]} ${lines[i + 1]}`);
       }
       if (!entry) continue;
-      if (/\b(?:technique de ponte|bouclier|armes|architecture|communication|vitesse de chasse|vitesse d'attaque|génétique|acide|poison)\b/i.test(entry.name)) {
-        continue;
-      }
-      buildings[entry.name] = {
+      const bName = canonicalLevelName(entry.name, BUILDING_NAMES);
+      if (!bName) continue;
+      buildings[bName] = {
         level: entry.level,
         targetLevel: entry.targetLevel,
         updatedAt: Date.now()
@@ -1876,7 +1932,7 @@
 
   function scrapeLaboratoirePage(forceScan = false) {
     if (!IS_LABORATOIRE || !document.body) return 0;
-    const text = document.body.innerText || "";
+    const text = readPageTextWithoutOwnUi();
     const sig = text.replace(/\s+/g, " ").trim();
     if (!forceScan && sig && sig === lastLaboSig) return 0;
     lastLaboSig = sig;
@@ -1891,12 +1947,14 @@
         entry = parseLevelEntryFromLine(`${lines[i]} ${lines[i + 1]}`);
       }
       if (!entry) continue;
-      lab[entry.name] = {
+      const labName = canonicalLevelName(entry.name, LAB_NAMES);
+      if (!labName) continue;
+      lab[labName] = {
         level: entry.level,
         targetLevel: entry.targetLevel,
         updatedAt: Date.now()
       };
-      if (/vitesse\s+d['’]attaque/i.test(entry.name)) {
+      if (labName === "Vitesse d'attaque") {
         detectedVa = entry.level;
       }
     }
@@ -4139,19 +4197,6 @@
             ⚔️ Attaques sur lui : <b>${attacks.length}</b> · 📉 Pris max : <b>${formatNumber(totalTaken)} cm²</b> · 🏹 Chasses : <b>${hunts.length}</b><br>
             🚚 Convois entrants : <b>${playerConvoys.incoming.length}</b> · sortants : <b>${playerConvoys.outgoing.length}</b>
           </div>
-          ${
-            isMe
-              ? `
-                <div style="margin-top:8px;padding-top:8px;border-top:1px solid rgba(148,163,184,.18)">
-                  <label class="fmz-gb-lbl" for="fmz-pl-va-input">⚡ Vitesse d'attaque (auto sur Laboratoire ou saisie manuelle)</label>
-                  <div class="fmz-gb-account-row">
-                    <input id="fmz-pl-va-input" class="fmz-gb-account-input" type="number" min="0" step="1" value="${vaVal != null ? esc(vaVal) : ""}" placeholder="Ex : 9">
-                    <button id="fmz-pl-va-save" class="fmz-gb-btn primary" type="button">Enregistrer</button>
-                  </div>
-                </div>
-              `
-              : ""
-          }
         </div>
         ${renderSectionBlock(
           "pl_attacks",
@@ -4717,17 +4762,6 @@
       };
     });
 
-    const saveVaBtn = root.querySelector("#fmz-pl-va-save");
-    const vaInp = root.querySelector("#fmz-pl-va-input");
-    if (saveVaBtn && vaInp) {
-      saveVaBtn.onclick = () => {
-        const raw = String(vaInp.value || "").trim();
-        const num = raw === "" ? null : Math.max(0, parseInt(raw, 10) || 0);
-        updatePlayerProfile(devUser, { attackSpeed: num }, true);
-        renderGlobalBubble(true);
-      };
-    }
-
     const plBackBtn = root.querySelector("#fmz-gb-pl-back");
     if (plBackBtn) {
       plBackBtn.onclick = () => {
@@ -4981,7 +5015,6 @@
     if (
       active &&
       (active.id === "fmz-gb-pseudo-input" ||
-        active.id === "fmz-pl-va-input" ||
         (active.closest && active.closest("#fmz-gb-root")))
     ) {
       return;
