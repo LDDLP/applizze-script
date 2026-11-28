@@ -1,10 +1,10 @@
 // ==UserScript==
 // @name         Le Dôme De La Paix - Fourmizzz S5 (Ressources, Armee, Commerce & Alliance)
 // @namespace    https://s5.fourmizzz.fr/
-// @version      0.5.76-worker
+// @version      0.5.77-worker
 // @updateURL    https://raw.githubusercontent.com/LDDLP/applizze-script/main/fourmizzz.user.js
 // @downloadURL  https://raw.githubusercontent.com/LDDLP/applizze-script/main/fourmizzz.user.js
-// @description  Outils d'alliance centralisés sur S5 : chasses en tête du Dôme avec TDC + chassé, attaques compactes avec filtres et tri, TDC attaquant/cible en rouge/vert, règle 50%-300% / 20% max, convois, fiche joueur dédiée et import auto construction/laboratoire.
+// @description  Outils d'alliance centralisés sur S5 : chasses en tête du Dôme avec TDC + chassé, attaques compactes avec filtres et tri, TDC attaquant/cible en rouge/vert, règle 50%-300% / 20% max, convois, fiche joueur dédiée, import auto construction/laboratoire et animations UI fluides.
 // @match        *://s5.fourmizzz.fr/*
 // @run-at       document-end
 // @grant        GM_xmlhttpRequest
@@ -22,7 +22,7 @@
   const HOST = window.location.hostname.toLowerCase();
   if (HOST !== "s5.fourmizzz.fr") return;
 
-  const SCRIPT_VERSION = "0.5.76-worker";
+  const SCRIPT_VERSION = "0.5.77-worker";
 
   const PATH = window.location.pathname.toLowerCase();
   const HREF = window.location.href.toLowerCase();
@@ -105,6 +105,9 @@
   let lastMembersTableSig = "";
   let lastConstructionSig = "";
   let lastLaboSig = "";
+
+  const prevPillCounts = { alliance: null, convoy: null, dome: null };
+  let cardFlashUntil = 0;
 
   const DEFAULT_PLAYERS = [
     { name: "Peps", x: 80, y: 52, va: 0 },
@@ -284,6 +287,61 @@
     }
   }
 
+  function triggerCardImportFlash() {
+    cardFlashUntil = Date.now() + 900;
+    const card = document.getElementById("fmz-gb-card");
+    if (card) {
+      card.classList.remove("fmz-import-flash");
+      void card.offsetWidth;
+      card.classList.add("fmz-import-flash");
+    }
+  }
+
+  function spawnCelebrationBurst(type = "hunt", labelText = "") {
+    if (!document.body) return;
+    injectGlobalBubbleStyles();
+
+    const icons =
+      type === "convoy"
+        ? ["🚚", "🪵", "🍎", "✨"]
+        : ["🏹", "✨", "🌿", "📐"];
+
+    let layer = document.getElementById("fmz-celebration-layer");
+    if (!layer) {
+      layer = document.createElement("div");
+      layer.id = "fmz-celebration-layer";
+      document.body.appendChild(layer);
+    }
+
+    const baseRight = 48 + Math.floor(Math.random() * 140);
+    const baseBottom = 68;
+
+    icons.forEach((icon, i) => {
+      const p = document.createElement("span");
+      p.className = "fmz-burst-particle";
+      p.textContent = icon;
+      const dx = (i - (icons.length - 1) / 2) * 26 + (Math.random() * 10 - 5);
+      const dy = -58 - Math.random() * 34;
+      p.style.right = `${baseRight}px`;
+      p.style.bottom = `${baseBottom}px`;
+      p.style.setProperty("--dx", `${dx.toFixed(1)}px`);
+      p.style.setProperty("--dy", `${dy.toFixed(1)}px`);
+      p.style.animationDelay = `${i * 55}ms`;
+      layer.appendChild(p);
+      setTimeout(() => p.remove(), 1450);
+    });
+
+    if (labelText) {
+      const tag = document.createElement("div");
+      tag.className = `fmz-burst-label ${type === "convoy" ? "convoy" : "hunt"}`;
+      tag.textContent = labelText;
+      tag.style.right = `${Math.max(16, baseRight - 32)}px`;
+      tag.style.bottom = `${baseBottom + 18}px`;
+      layer.appendChild(tag);
+      setTimeout(() => tag.remove(), 1850);
+    }
+  }
+
   function getDevUser() {
     try {
       const val = localStorage.getItem(STORAGE_KEYS.devUser);
@@ -381,7 +439,7 @@
 
   function readPageTextWithoutOwnUi() {
     const hidden = [];
-    document.querySelectorAll("#fmz-gb-root, #fmz-gb-left-dock").forEach((el) => {
+    document.querySelectorAll("#fmz-gb-root, #fmz-gb-left-dock, #fmz-armee-badge-wrap, #fmz-celebration-layer").forEach((el) => {
       hidden.push([el, el.style.visibility]);
       el.style.visibility = "hidden";
     });
@@ -1618,6 +1676,7 @@
     const prevStored = readJsonArray(STORAGE_KEYS.hunts);
     const history = readJsonArray(STORAGE_KEYS.huntHistory);
     const existingIds = new Set(history.map((item) => String(item.sig || item.id)));
+    const myNorm = normalizePseudo(getDevUser());
     let added = false;
 
     for (const h of prevStored) {
@@ -1630,11 +1689,48 @@
         });
         existingIds.add(id);
         added = true;
+        if (normalizePseudo(h.player) === myNorm) {
+          const areaLabel = h.area ? ` (+${formatNumber(h.area)} cm²)` : "";
+          spawnCelebrationBurst("hunt", `🏹 Chasse terminée${areaLabel}`);
+        }
       }
     }
 
     if (added) {
       writeJsonArray(STORAGE_KEYS.huntHistory, history.slice(0, 25));
+    }
+  }
+
+  function checkFinishedConvoysCelebration(now = Date.now()) {
+    const rawMov = readJsonArray(STORAGE_KEYS.movements);
+    const activeMov = [];
+    const myNorm = normalizePseudo(getDevUser());
+    let finishedMine = null;
+
+    for (const m of rawMov) {
+      if (!m) continue;
+      if (Number(m.arrivalAt || 0) <= now - 5000) {
+        if (m.type === "convoy") {
+          const fromN = normalizePseudo((m.from && m.from.name) || m.createdBy || "");
+          const toN = normalizePseudo((m.to && m.to.name) || "");
+          if (fromN === myNorm || toN === myNorm) {
+            finishedMine = m;
+          }
+        }
+      } else {
+        activeMov.push(m);
+      }
+    }
+
+    if (activeMov.length !== rawMov.length) {
+      writeJsonArray(STORAGE_KEYS.movements, activeMov);
+    }
+
+    if (finishedMine) {
+      const peer = normalizePseudo((finishedMine.to && finishedMine.to.name) || "") === myNorm
+        ? playerDisplayName((finishedMine.from && finishedMine.from.name) || "Alliance")
+        : playerDisplayName((finishedMine.to && finishedMine.to.name) || "Alliance");
+      spawnCelebrationBurst("convoy", `🚚 Convoi livré (${peer})`);
     }
   }
 
@@ -1758,6 +1854,7 @@
 
   function mergeRemoteConvoys(remoteConvoys) {
     const now = Date.now();
+    checkFinishedConvoysCelebration(now);
     const localList = readCleanTimedArray(STORAGE_KEYS.movements, now);
     const merged = [];
 
@@ -1966,6 +2063,8 @@
       if (statsPayload) {
         syncWithWorker({ kind: "stats", alliance: OWN_ALLIANCE_TAG, stats: statsPayload }, "lddlp_stats");
       }
+      showImportedToast(`TDC ${OWN_ALLIANCE_TAG} importés (${count})`);
+      triggerCardImportFlash();
     }
     return count;
   }
@@ -2053,7 +2152,14 @@
 
     const count = Object.keys(buildings).length;
     if (count > 0) {
+      const prevProf = getPlayerProfile(getDevUser());
+      const prevSig = JSON.stringify(prevProf.buildings || {});
       updatePlayerProfile(getDevUser(), { buildings }, true);
+      const nextProf = getPlayerProfile(getDevUser());
+      if (prevSig !== JSON.stringify(nextProf.buildings || {})) {
+        showImportedToast("Bâtiments importés");
+        triggerCardImportFlash();
+      }
     }
     return count;
   }
@@ -2094,11 +2200,18 @@
 
     const count = Object.keys(lab).length;
     if (count > 0 || detectedVa != null) {
+      const prevProf = getPlayerProfile(getDevUser());
+      const prevSig = JSON.stringify(prevProf.lab || {});
       const patch = { lab };
       if (detectedVa != null) {
         patch.attackSpeed = detectedVa;
       }
       updatePlayerProfile(getDevUser(), patch, true);
+      const nextProf = getPlayerProfile(getDevUser());
+      if (prevSig !== JSON.stringify(nextProf.lab || {})) {
+        showImportedToast("Laboratoire importé");
+        triggerCardImportFlash();
+      }
     }
     return count;
   }
@@ -2466,35 +2579,13 @@
     };
   }
 
-  let armeeBubbleTimer = null;
+  let importToastTimer = null;
   let lastArmeeSnapshotKey = "";
-  let commerceBubbleTimer = null;
   let lastCommerceSnapshotKey = "";
 
-  function ensureArmeeIndicator() {
-    if (!IS_ATTACK_PAGE && !IS_COMMERCE) return null;
+  function ensureImportToastContainer() {
     if (!document.body) return null;
-    if (!document.getElementById("fmz-armee-style")) {
-      const style = document.createElement("style");
-      style.id = "fmz-armee-style";
-      style.textContent = `
-        #fmz-armee-badge-wrap{
-          position:fixed;right:12px;bottom:58px;z-index:10001;
-          display:flex;align-items:center;gap:8px;
-          font-family:system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif;pointer-events:none;
-        }
-        #fmz-armee-bubble{
-          background:rgba(6,78,59,.92);border:1px solid rgba(52,211,153,.65);color:#ecfdf5;
-          padding:6px 12px;border-radius:999px;font-size:12px;font-weight:700;
-          box-shadow:0 8px 22px rgba(0,0,0,.55),0 0 14px rgba(16,185,129,.25);
-          backdrop-filter:blur(10px);
-          opacity:0;transform:translateY(6px);
-          transition:opacity .2s ease,transform .2s ease;white-space:nowrap;
-        }
-        #fmz-armee-bubble.show{opacity:1;transform:translateY(0)}
-      `;
-      (document.head || document.body).appendChild(style);
-    }
+    injectGlobalBubbleStyles();
 
     let wrap = document.getElementById("fmz-armee-badge-wrap");
     if (!wrap) {
@@ -2508,20 +2599,22 @@
     return wrap;
   }
 
-  function showArmeeImportedBubble(message = "Attaques importées") {
-    if (!IS_ATTACK_PAGE && !IS_COMMERCE) return;
-    ensureArmeeIndicator();
+  function showImportedToast(message = "Données importées") {
+    ensureImportToastContainer();
     const bubble = document.getElementById("fmz-armee-bubble");
     if (!bubble) return;
-    bubble.textContent = message;
+    bubble.innerHTML = `<span class="fmz-toast-check">✓</span><span>${esc(message)}</span>`;
+    bubble.classList.remove("show");
+    void bubble.offsetWidth;
     bubble.classList.add("show");
-    const activeTimer = IS_COMMERCE ? commerceBubbleTimer : armeeBubbleTimer;
-    if (activeTimer) clearTimeout(activeTimer);
-    const timerId = setTimeout(() => {
+    if (importToastTimer) clearTimeout(importToastTimer);
+    importToastTimer = setTimeout(() => {
       bubble.classList.remove("show");
     }, 3000);
-    if (IS_COMMERCE) commerceBubbleTimer = timerId;
-    else armeeBubbleTimer = timerId;
+  }
+
+  function showArmeeImportedBubble(message = "Attaques importées") {
+    showImportedToast(message);
   }
 
   function extractAttacksFromArmeePage() {
@@ -2663,6 +2756,7 @@
     if (currentScan.length > 0 && (addedOrUpdatedCount > 0 || snapshotKey !== lastArmeeSnapshotKey)) {
       lastArmeeSnapshotKey = snapshotKey;
       showArmeeImportedBubble("Attaques importées");
+      triggerCardImportFlash();
     } else if (currentScan.length === 0) {
       lastArmeeSnapshotKey = "";
     }
@@ -2974,6 +3068,7 @@
       const res = fillCommerceFormFields(data);
       if (res && res.filledCount > 0) {
         lastCommerceMessage = `✓ Champs pré-remplis pour ${data.recipient || "destinataire"} (🪵 ${formatNumber(data.wood)} · 🍎 ${formatNumber(data.apples)}).`;
+        showImportedToast(`Formulaire pré-rempli (${data.recipient || "destinataire"})`);
         renderGlobalBubble();
       }
     };
@@ -3187,6 +3282,7 @@
     if (newlyDetected.length > 0 || snapshotKey !== lastCommerceSnapshotKey) {
       lastCommerceSnapshotKey = snapshotKey;
       showArmeeImportedBubble("Convois importés");
+      triggerCardImportFlash();
     }
   }
 
@@ -3216,6 +3312,7 @@
     convoyRequests.push(newReq);
     saveConvoyRequestsLocal();
     syncWithWorker({ kind: "requests", action: "create", request: newReq }, false);
+    showImportedToast("Demande de convoi envoyée");
     return { ok: true, message: "✓ Demande de convoi enregistrée." };
   }
 
@@ -3251,6 +3348,7 @@
 
     if (IS_COMMERCE) {
       fillCommerceFormFields({ recipient: destName, apples, wood });
+      showImportedToast(`Champs remplis pour ${destName}`);
       return {
         ok: true,
         message: `✓ Champs pré-remplis pour ${destName}. Valide l'envoi sur Fourmizzz pour clôturer la demande.`
@@ -3306,8 +3404,101 @@
         }
       }
       @keyframes fmzHudEnter {
-        from { opacity:0; transform:translateY(6px) scale(.99); }
+        from { opacity:0; transform:translateY(8px) scale(.985); }
         to { opacity:1; transform:translateY(0) scale(1); }
+      }
+      @keyframes fmzRadarPulse {
+        0% {
+          box-shadow:0 6px 20px rgba(127,29,29,.45), 0 0 0 0 rgba(248,113,113,.62);
+        }
+        70% {
+          box-shadow:0 6px 20px rgba(127,29,29,.55), 0 0 0 10px rgba(248,113,113,0);
+        }
+        100% {
+          box-shadow:0 6px 20px rgba(127,29,29,.45), 0 0 0 0 rgba(248,113,113,0);
+        }
+      }
+      @keyframes fmzCriticalTick {
+        0%, 100% { transform:scale(1); box-shadow:0 0 0 0 rgba(248,113,113,.45); }
+        50% { transform:scale(1.05); box-shadow:0 0 10px rgba(248,113,113,.75); }
+      }
+      @keyframes fmzSyncBreathe {
+        0%, 100% { opacity:1; transform:scale(1); }
+        50% { opacity:.42; transform:scale(.78); }
+      }
+      @keyframes fmzPillPop {
+        0% { transform:scale(1); }
+        45% { transform:scale(1.22); }
+        100% { transform:scale(1); }
+      }
+      @keyframes fmzCardFlash {
+        0% { border-color:rgba(52,211,153,.95); box-shadow:0 16px 36px rgba(0,0,0,.78), 0 0 26px rgba(52,211,153,.42); }
+        100% { border-color:rgba(56,189,248,.35); box-shadow:0 16px 36px rgba(0,0,0,.78), 0 0 24px rgba(14,165,233,.12); }
+      }
+      @keyframes fmzToastIn {
+        0% { opacity:0; transform:translateY(10px) scale(.95); }
+        100% { opacity:1; transform:translateY(0) scale(1); }
+      }
+      @keyframes fmzCheckPop {
+        0% { transform:scale(.5) rotate(-15deg); }
+        65% { transform:scale(1.25) rotate(6deg); }
+        100% { transform:scale(1) rotate(0deg); }
+      }
+      @keyframes fmzBurstFloat {
+        0% { opacity:0; transform:translate(0, 6px) scale(.6); }
+        18% { opacity:1; transform:translate(calc(var(--dx) * .25), -10px) scale(1.1); }
+        100% { opacity:0; transform:translate(var(--dx), var(--dy)) scale(.85); }
+      }
+      @keyframes fmzBurstBanner {
+        0% { opacity:0; transform:translateY(8px) scale(.95); }
+        18% { opacity:1; transform:translateY(0) scale(1); }
+        82% { opacity:1; transform:translateY(-8px) scale(1); }
+        100% { opacity:0; transform:translateY(-16px) scale(.97); }
+      }
+      #fmz-celebration-layer{
+        position:fixed;inset:0;pointer-events:none;z-index:10030;overflow:hidden;
+      }
+      .fmz-burst-particle{
+        position:fixed;font-size:16px;line-height:1;
+        filter:drop-shadow(0 3px 8px rgba(0,0,0,.65));
+        animation:fmzBurstFloat 1.35s cubic-bezier(.16,.84,.44,1) forwards;
+      }
+      .fmz-burst-label{
+        position:fixed;padding:5px 11px;border-radius:999px;font-size:11px;font-weight:800;
+        backdrop-filter:blur(8px);white-space:nowrap;
+        box-shadow:0 8px 22px rgba(0,0,0,.6);
+        animation:fmzBurstBanner 1.8s ease forwards;
+      }
+      .fmz-burst-label.hunt{
+        background:rgba(120,53,15,.92);border:1px solid rgba(251,191,36,.75);color:#fef3c7;
+      }
+      .fmz-burst-label.convoy{
+        background:rgba(6,78,59,.92);border:1px solid rgba(52,211,153,.75);color:#d1fae5;
+      }
+      #fmz-armee-badge-wrap{
+        position:fixed;right:12px;bottom:58px;z-index:10001;
+        display:flex;align-items:center;gap:8px;
+        font-family:system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif;pointer-events:none;
+      }
+      #fmz-armee-bubble{
+        display:inline-flex;align-items:center;gap:6px;
+        background:rgba(6,78,59,.94);border:1px solid rgba(52,211,153,.7);color:#ecfdf5;
+        padding:6px 12px;border-radius:999px;font-size:12px;font-weight:700;
+        box-shadow:0 8px 22px rgba(0,0,0,.55),0 0 16px rgba(16,185,129,.28);
+        backdrop-filter:blur(10px);
+        opacity:0;transform:translateY(8px) scale(.96);
+        transition:opacity .22s ease,transform .22s cubic-bezier(.22,1,.36,1);
+        white-space:nowrap;
+      }
+      #fmz-armee-bubble.show{
+        opacity:1;transform:translateY(0) scale(1);
+        animation:fmzToastIn .22s cubic-bezier(.22,1,.36,1);
+      }
+      .fmz-toast-check{
+        display:inline-flex;align-items:center;justify-content:center;
+        width:16px;height:16px;border-radius:999px;
+        background:rgba(52,211,153,.24);color:#6ee7b7;font-size:11px;font-weight:900;
+        animation:fmzCheckPop .32s ease-out;
       }
       #fmz-gb-left-dock{
         position:fixed;left:12px;bottom:14px;z-index:10000;
@@ -3332,7 +3523,7 @@
         backdrop-filter:blur(10px);
         border-radius:999px;padding:7px 11px;cursor:pointer;
         font-weight:700;font-size:12px;user-select:none;
-        transition:transform .14s ease,border-color .14s ease,box-shadow .14s ease,background .14s ease;
+        transition:transform .14s cubic-bezier(.22,1,.36,1),border-color .14s ease,box-shadow .14s ease,background .14s ease;
       }
       .fmz-gb-fab:hover{
         background:linear-gradient(135deg,rgba(30,41,59,.96),rgba(15,23,42,.96));
@@ -3340,10 +3531,16 @@
         box-shadow:0 8px 22px rgba(0,0,0,.65),0 0 14px rgba(34,211,238,.22);
         color:#ffffff;transform:translateY(-1px);
       }
+      .fmz-gb-fab:active{
+        transform:scale(.96);
+      }
       .fmz-gb-fab.alert{
         background:linear-gradient(135deg,rgba(127,29,29,.94),rgba(69,10,10,.94));
         border-color:rgba(248,113,113,.75);color:#fff;
         box-shadow:0 6px 20px rgba(127,29,29,.45),0 0 14px rgba(239,68,68,.3);
+      }
+      .fmz-gb-fab.radar{
+        animation:fmzRadarPulse 2s infinite ease-out;
       }
       .fmz-gb-fab.convoy.active, .fmz-gb-fab.alliance.active, .fmz-gb-fab.stats.active, .fmz-gb-fab.players.active{
         background:linear-gradient(135deg,rgba(8,145,178,.42),rgba(30,58,138,.82));
@@ -3359,8 +3556,13 @@
         animation:fmzUpdateBlink 1s infinite ease-in-out;
       }
       .fmz-gb-pill{
+        display:inline-block;
         background:rgba(2,6,23,.8);border:1px solid rgba(56,189,248,.35);border-radius:999px;
         padding:1px 7px;font-size:11px;color:#67e8f9;font-weight:700;
+        transition:transform .2s ease,background .2s ease;
+      }
+      .fmz-gb-pill.pop{
+        animation:fmzPillPop .34s cubic-bezier(.22,1,.36,1);
       }
       .fmz-gb-fab.alert .fmz-gb-pill{
         background:rgba(69,10,10,.88);border-color:rgba(252,165,165,.6);color:#fecaca;
@@ -3377,7 +3579,10 @@
         padding:11px;
         box-shadow:0 16px 36px rgba(0,0,0,.78),0 0 24px rgba(14,165,233,.12),inset 0 1px 0 rgba(255,255,255,.08);
         backdrop-filter:blur(12px);
-        animation:fmzHudEnter .16s ease-out;
+        animation:fmzHudEnter .2s cubic-bezier(.22,1,.36,1);
+      }
+      #fmz-gb-card.fmz-import-flash{
+        animation:fmzCardFlash .85s ease-out;
       }
       #fmz-gb-card.fmz-player-page{
         position:fixed;
@@ -3390,7 +3595,7 @@
         overflow-y:auto;
         overscroll-behavior:contain;
         -webkit-overflow-scrolling:touch;
-        animation:none;
+        animation:fmzHudEnter .2s cubic-bezier(.22,1,.36,1);
         margin:0 !important;
         z-index:10020;
         border-radius:16px;
@@ -3408,9 +3613,14 @@
         border:1px solid rgba(148,163,184,.35);
         border-radius:7px;padding:4px 8px;min-height:26px;cursor:pointer;
         font-size:11px;font-weight:700;
-        transition:background .12s ease,border-color .12s ease;
+        transition:transform .12s cubic-bezier(.22,1,.36,1),background .12s ease,border-color .12s ease,box-shadow .12s ease;
       }
       .fmz-gb-btn:hover{background:rgba(51,65,85,.95) !important;border-color:#38bdf8}
+      .fmz-gb-btn:active{transform:scale(.95)}
+      .fmz-gb-btn.clicked{
+        transform:scale(.96);
+        box-shadow:0 0 0 2px rgba(56,189,248,.45);
+      }
       .fmz-gb-btn.primary{
         background:linear-gradient(135deg,#059669,#047857) !important;
         border-color:#34d399;color:#ecfdf5 !important;
@@ -3426,8 +3636,9 @@
         flex:1;background:rgba(9,15,28,.85) !important;color:#94a3b8 !important;
         border:1px solid rgba(56,189,248,.18);border-radius:7px;padding:5px 6px;min-height:26px;
         cursor:pointer;font-size:11px;font-weight:700;text-align:center;
-        transition:all .12s ease;
+        transition:all .14s ease;
       }
+      .fmz-gb-filter-btn:active{transform:scale(.97)}
       .fmz-gb-filter-btn.active{
         background:rgba(8,145,178,.28) !important;color:#67e8f9 !important;
         border-color:#22d3ee;box-shadow:0 0 10px rgba(34,211,238,.18);
@@ -3442,9 +3653,13 @@
       .fmz-gb-sync-badge::before{
         content:"";width:7px;height:7px;border-radius:999px;
         background:#64748b;box-shadow:0 0 6px rgba(100,116,139,.6);
+        transition:background .25s ease,box-shadow .25s ease;
       }
       .fmz-gb-sync-badge.ok::before{background:#34d399;box-shadow:0 0 8px rgba(52,211,153,.85)}
-      .fmz-gb-sync-badge.syncing::before{background:#22d3ee;box-shadow:0 0 8px rgba(34,211,238,.85)}
+      .fmz-gb-sync-badge.syncing::before{
+        background:#22d3ee;box-shadow:0 0 8px rgba(34,211,238,.9);
+        animation:fmzSyncBreathe 1s infinite ease-in-out;
+      }
       .fmz-gb-sync-badge.backoff::before{background:#fbbf24;box-shadow:0 0 8px rgba(251,191,36,.8)}
       .fmz-gb-sync-badge.error::before{background:#f87171;box-shadow:0 0 8px rgba(248,113,113,.85)}
       .fmz-gb-link{color:#38bdf8;text-decoration:none;font-weight:700}
@@ -3452,6 +3667,7 @@
       .fmz-gb-account-box{
         background:rgba(9,15,28,.88);border:1px solid rgba(56,189,248,.35);border-radius:10px;
         padding:8px;margin-bottom:8px;
+        animation:fmzHudEnter .18s ease-out;
       }
       .fmz-gb-account-row{display:flex;gap:6px;margin-top:6px}
       .fmz-gb-account-input{
@@ -3462,6 +3678,7 @@
         background:rgba(9,15,28,.84);border:1px solid rgba(56,189,248,.18);border-radius:10px;
         padding:8px 9px;margin-bottom:7px;
         box-shadow:inset 0 1px 0 rgba(255,255,255,.04);
+        transition:border-color .2s ease,background .2s ease;
       }
       .fmz-gb-sec:last-child{margin-bottom:0}
       .fmz-gb-sec.danger{border-left:3px solid #f87171}
@@ -3474,9 +3691,33 @@
         font-weight:700;font-size:11px;letter-spacing:.04em;text-transform:uppercase;
         color:#e2e8f0;cursor:pointer;user-select:none;
       }
-      .fmz-gb-sec-body{margin-top:6px}
-      .fmz-gb-sec.collapsed .fmz-gb-sec-body{display:none}
-      .fmz-gb-row{padding:6px 4px;border-top:1px solid rgba(148,163,184,.12);line-height:1.35}
+      .fmz-gb-sec-arrow{
+        display:inline-block;margin-right:4px;
+        transition:transform .2s cubic-bezier(.22,1,.36,1);
+        transform:rotate(90deg);
+      }
+      .fmz-gb-sec.collapsed .fmz-gb-sec-arrow{
+        transform:rotate(0deg);
+      }
+      .fmz-gb-sec-body{
+        display:grid;
+        grid-template-rows:1fr;
+        opacity:1;
+        margin-top:6px;
+        transition:grid-template-rows .22s cubic-bezier(.22,1,.36,1),opacity .18s ease,margin-top .22s ease;
+      }
+      .fmz-gb-sec-inner{
+        overflow:hidden;
+      }
+      .fmz-gb-sec.collapsed .fmz-gb-sec-body{
+        grid-template-rows:0fr;
+        opacity:0;
+        margin-top:0;
+      }
+      .fmz-gb-row{
+        padding:6px 4px;border-top:1px solid rgba(148,163,184,.12);line-height:1.35;
+        transition:background .18s ease,transform .18s ease;
+      }
       .fmz-gb-row.soon{background:rgba(239,68,68,.14);padding:6px 7px;border-radius:8px}
       .fmz-gb-row.targeted-me{border-left:2px solid #f87171;padding-left:7px}
       .fmz-gb-row.will-fail{background:rgba(245,158,11,.14);border-left:2px solid #fbbf24;padding:6px 7px;border-radius:8px}
@@ -3486,13 +3727,19 @@
         display:flex;justify-content:space-between;align-items:center;gap:8px;width:100%;
         background:transparent !important;border:none !important;color:#f1f5f9 !important;
         padding:2px 0;cursor:pointer;text-align:left;font-size:12px;
+        transition:transform .12s ease;
       }
+      .fmz-gb-rank-btn:active{transform:scale(.99)}
       .fmz-gb-rank-btn:hover .fmz-gb-rank-name{color:#67e8f9;text-decoration:underline}
       .fmz-gb-rank-left{display:inline-flex;align-items:center;gap:7px;min-width:0}
       .fmz-gb-rank-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
       .fmz-gb-rank-right{display:inline-flex;align-items:center;gap:7px;flex-shrink:0}
       .fmz-gb-cd{white-space:nowrap;font-weight:700;font-size:11px;color:#67e8f9}
-      .fmz-gb-cd.critical{color:#fecaca;background:rgba(153,27,27,.85);padding:1px 6px;border-radius:5px;border:1px solid rgba(248,113,113,.5)}
+      .fmz-gb-cd.critical{
+        color:#fecaca;background:rgba(153,27,27,.85);padding:1px 6px;border-radius:5px;
+        border:1px solid rgba(248,113,113,.5);
+        animation:fmzCriticalTick 1.3s infinite ease-in-out;
+      }
       .fmz-gb-cd.warn{color:#fde68a}
       .fmz-gb-sub{color:#94a3b8;font-size:11px;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
       .fmz-gb-tdc{color:#cbd5e1;font-size:11px;margin-top:2px}
@@ -3504,13 +3751,14 @@
       .fmz-gb-rule{color:#6ee7b7;font-size:11px;margin-top:2px}
       .fmz-gb-fail{color:#fbbf24;font-size:11px;font-weight:700;margin-top:2px}
       .fmz-gb-prog{
-        height:4px;background:rgba(30,41,59,.9);border-radius:999px;
+        height:5px;background:rgba(30,41,59,.9);border-radius:999px;
         overflow:hidden;margin-top:5px;border:1px solid rgba(56,189,248,.15);
       }
       .fmz-gb-prog > span{
         display:block;height:100%;
         background:linear-gradient(90deg,#22d3ee,#34d399);
         border-radius:999px;
+        transition:width .42s cubic-bezier(.22,1,.36,1);
       }
       .fmz-gb-empty{color:#94a3b8;font-size:11px}
       .fmz-gb-grid2{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:5px}
@@ -3519,11 +3767,15 @@
         width:100%;background:#0f172a;color:#f8fafc;border:1px solid rgba(56,189,248,.32);
         border-radius:7px;padding:5px 8px;font-size:12px;margin-top:2px;
         font-variant-numeric:tabular-nums;
+        transition:border-color .15s ease,box-shadow .15s ease;
       }
-      .fmz-gb-inp:focus{outline:none;border-color:#22d3ee}
+      .fmz-gb-inp:focus{outline:none;border-color:#22d3ee;box-shadow:0 0 0 2px rgba(34,211,238,.18)}
       .fmz-gb-actions{display:flex;gap:6px;margin-top:7px}
       .fmz-gb-actions button{flex:1}
-      .fmz-gb-msg{margin-top:6px;font-size:11px;color:#6ee7b7}
+      .fmz-gb-msg{
+        margin-top:6px;font-size:11px;color:#6ee7b7;
+        transition:opacity .2s ease,transform .2s ease;
+      }
       .fmz-gb-msg.warn{color:#fca5a5}
       .fmz-gb-safe-dot{
         display:inline-block;flex:0 0 11px;width:11px;height:11px;border-radius:50%;
@@ -3543,7 +3795,9 @@
         flex:1;background:rgba(9,15,28,.88) !important;color:#94a3b8 !important;
         border:1px solid rgba(56,189,248,.2);border-radius:8px;padding:7px 8px;
         cursor:pointer;font-size:11px;font-weight:700;text-align:center;
+        transition:all .14s ease;
       }
+      .fmz-gb-tab:active{transform:scale(.97)}
       .fmz-gb-tab.active{
         background:rgba(8,145,178,.32) !important;color:#ecfeff !important;
         border-color:#22d3ee;
@@ -3554,14 +3808,15 @@
       .fmz-gb-lvl-card{
         background:rgba(9,15,28,.88);border:1px solid rgba(56,189,248,.18);
         border-radius:8px;padding:7px 8px;font-size:11px;
+        transition:border-color .15s ease,transform .15s ease;
       }
+      .fmz-gb-lvl-card:hover{border-color:rgba(34,211,238,.45)}
       .fmz-gb-lvl-name{color:#e2e8f0;font-weight:700}
       .fmz-gb-lvl-val{color:#67e8f9;font-weight:800;margin-top:2px}
       .fmz-gb-lvl-prog{color:#fbbf24;font-size:10px;margin-top:2px;font-weight:700}
     `;
     (document.head || document.body).appendChild(style);
   }
-
   function renderSyncStatusHtml() {
     const st = String(syncStatus.state || "idle");
     return `<span class="fmz-gb-sync-badge ${esc(st)}">${esc(syncStatus.label)}</span>`;
@@ -3588,22 +3843,19 @@
       document.body.appendChild(root);
     }
 
-    if (IS_ATTACK_PAGE || IS_COMMERCE) {
-      ensureArmeeIndicator();
-    }
+    ensureImportToastContainer();
 
     return true;
   }
 
   function renderSectionBlock(key, title, count, bodyHtml, extraClass = "", collapsed = false) {
-    const arrow = collapsed ? "▸" : "▾";
     return `
       <div class="fmz-gb-sec ${extraClass} ${collapsed ? "collapsed" : ""}" data-sec="${esc(key)}">
         <div class="fmz-gb-sec-title" data-toggle-sec="${esc(key)}">
-          <span>${arrow} ${title}</span>
+          <span><span class="fmz-gb-sec-arrow">▸</span>${title}</span>
           <span>${count}</span>
         </div>
-        <div class="fmz-gb-sec-body">${bodyHtml}</div>
+        <div class="fmz-gb-sec-body"><div class="fmz-gb-sec-inner">${bodyHtml}</div></div>
       </div>
     `;
   }
@@ -3726,8 +3978,10 @@
           })
           .join("");
 
+    const flashClass = Date.now() < cardFlashUntil ? "fmz-import-flash" : "";
+
     return `
-      <div id="fmz-gb-card">
+      <div id="fmz-gb-card" class="${flashClass}">
         <div class="fmz-gb-head">
           <b>📊 Tableau de bord ${OWN_ALLIANCE_TAG} · ${esc(devUser)}</b>
           <div class="fmz-gb-head-actions">
@@ -3787,7 +4041,6 @@
             const isWarn = leftSec <= 30 * 60;
             const urgencyClass = isCritical ? "critical" : isWarn ? "warn" : "";
             const isMeTarget = samePseudo(a.target, devUser);
-            const isMeAttacker = samePseudo(a.attacker, devUser);
 
             const atkClean = playerDisplayName(a.attacker || "Inconnu");
             const defClean = playerDisplayName(a.target || "?");
@@ -3845,8 +4098,10 @@
           })
           .join("");
 
+    const flashClass = Date.now() < cardFlashUntil ? "fmz-import-flash" : "";
+
     return `
-      <div id="fmz-gb-card">
+      <div id="fmz-gb-card" class="${flashClass}">
         <div class="fmz-gb-head">
           <b>🛡️ Alliance · Attaques</b>
           <div class="fmz-gb-head-actions">
@@ -3877,6 +4132,7 @@
       </div>
     `;
   }
+
   function buildConvoyBubbleHtml(devUser, now, collapsedMap) {
     const activeRequests = convoyRequests.filter((r) => r.status !== "done");
     const openCount = activeRequests.length;
@@ -4020,8 +4276,10 @@
           })
           .join("");
 
+    const flashClass = Date.now() < cardFlashUntil ? "fmz-import-flash" : "";
+
     return `
-      <div id="fmz-gb-card">
+      <div id="fmz-gb-card" class="${flashClass}">
         <div class="fmz-gb-head">
           <b>🚚 Convois · ${esc(devUser)}</b>
           <div class="fmz-gb-head-actions">
@@ -4243,6 +4501,7 @@
     const vaVal = getPlayerAttackSpeed(devUser);
     const bCount = Object.keys(profile.buildings || {}).length;
     const lCount = Object.keys(profile.lab || {}).length;
+    const flashClass = Date.now() < cardFlashUntil ? "fmz-import-flash" : "";
 
     const contentHtml =
       buildingHubTab === "lab"
@@ -4260,7 +4519,7 @@
         `;
 
     return `
-      <div id="fmz-gb-card">
+      <div id="fmz-gb-card" class="${flashClass}">
         <div class="fmz-gb-head">
           <b>🏗️ Bâtiment · ${esc(devUser)}</b>
           <div class="fmz-gb-head-actions">
@@ -4312,7 +4571,6 @@
       }
     });
 
-    const attackStatusBadge = "";
     const arrivalInfoHtml = !isMe
       ? `<div style="margin-top:5px">🚀 Trajet estimé : <b>${atkEval.travelSec != null ? formatDuration(atkEval.travelSec) : "indisponible"}</b>${atkEval.distance != null ? ` · Distance : <b>${atkEval.distance.toFixed(2)}</b>` : ""}${atkEval.arrivalAt ? ` · Arrivée : <b>${new Date(atkEval.arrivalAt).toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" })}</b>` : ""}<br>📊 TDC estimés à l'arrivée : <b>${atkEval.arrivalTargetTdc != null ? formatNumber(atkEval.arrivalTargetTdc) : "?"}</b> vs <b>${atkEval.arrivalAttackerTdc != null ? formatNumber(atkEval.arrivalAttackerTdc) : "?"}</b> cm² (${atkEval.arrivalRatioPct != null ? `${atkEval.arrivalRatioPct}%` : "ratio inconnu"})</div>`
       : "";
@@ -4330,7 +4588,6 @@
       <div class="fmz-gb-summary">
         <div style="display:flex;justify-content:space-between;align-items:center;gap:6px;margin-bottom:6px">
           <b>🎯 Règle 50%–300% (vs ${esc(devUser)})</b>
-          <div style="display:flex;flex-wrap:wrap;gap:5px;justify-content:flex-end">${attackStatusBadge}</div>
         </div>
         <div>${esc(atkEval.safeReason || atkEval.reason)}</div>
         ${arrivalInfoHtml}
@@ -4483,7 +4740,6 @@
         <div class="fmz-gb-head">
           <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
             <b>👤 Page joueur · ${esc(selected.name)}</b>
-            ${attackStatusBadge}
           </div>
           <div class="fmz-gb-head-actions">
             <button id="fmz-gb-refresh" class="fmz-gb-btn" type="button" title="Rafraîchir maintenant">🔄</button>
@@ -4630,6 +4886,7 @@
     root.classList.toggle("has-armee-badge", IS_ATTACK_PAGE || IS_COMMERCE);
 
     const hasImminentAttack = incomingAttacks.some((a) => (Number(a.arrivalAt || 0) - now) <= 30 * 60 * 1000);
+    const hasAllianceImminent = allAllianceAttacks.some((a) => (Number(a.arrivalAt || 0) - now) <= 30 * 60 * 1000);
     const totalEvents =
       incomingAttacks.length +
       outgoingAttacks.length +
@@ -4640,6 +4897,13 @@
     const domeBadge = incomingAttacks.length > 0
       ? `🛡️ ${incomingAttacks.length}`
       : `🌐 ${totalEvents}`;
+
+    const alliancePop = prevPillCounts.alliance !== null && prevPillCounts.alliance !== allAllianceAttacks.length;
+    const convoyPop = prevPillCounts.convoy !== null && prevPillCounts.convoy !== openRequestsCount;
+    const domePop = prevPillCounts.dome !== null && prevPillCounts.dome !== domeBadge;
+    prevPillCounts.alliance = allAllianceAttacks.length;
+    prevPillCounts.convoy = openRequestsCount;
+    prevPillCounts.dome = domeBadge;
 
     let cardHtml = "";
 
@@ -4764,7 +5028,7 @@
               }
               if (tdcInfo.hasTdc) {
                 const defAfter = !willFail && tdcInfo.taken > 0 ? tdcInfo.afterTdc : tdcInfo.beforeTdc;
-                const defDelta = !willFail && tdcInfo.taken > 0 ? -tdcInfo.taken : 0;
+                const defDelta = !willFail && tdcInfo.taken > 0 ? -defTdc.taken : 0;
                 badges.push(formatTdcChangeBadge(defClean, tdcInfo.beforeTdc, defAfter, defDelta));
               }
               return `
@@ -4831,9 +5095,10 @@
         : "";
 
       const membersLink = `<a class="fmz-gb-link" href="${esc(SHORTCUT_LINKS.membersUrl)}">📋 Membres (TDC)</a>`;
+      const flashClass = Date.now() < cardFlashUntil ? "fmz-import-flash" : "";
 
       cardHtml = `
-        <div id="fmz-gb-card">
+        <div id="fmz-gb-card" class="${flashClass}">
           <div class="fmz-gb-head">
             <b>🐜 Dôme · ${esc(devUser)}</b>
             <div class="fmz-gb-head-actions">
@@ -4913,21 +5178,29 @@
         <button id="fmz-gb-players-fab" class="fmz-gb-fab players ${isPlayersOpen ? "active" : ""}" type="button" title="Bâtiments et Laboratoire">
           <span>🏗️ Bâtiment</span>
         </button>
-        <button id="fmz-gb-alliance-fab" class="fmz-gb-fab alliance ${isAllianceOpen ? "active" : ""} ${allAllianceAttacks.length > 0 ? "alert" : ""}" type="button" title="Toutes les attaques de l'alliance">
+        <button id="fmz-gb-alliance-fab" class="fmz-gb-fab alliance ${isAllianceOpen ? "active" : ""} ${allAllianceAttacks.length > 0 ? "alert" : ""} ${hasAllianceImminent ? "radar" : ""}" type="button" title="Toutes les attaques de l'alliance">
           <span>🛡️ Alliance</span>
-          <span class="fmz-gb-pill">${allAllianceAttacks.length}</span>
+          <span class="fmz-gb-pill ${alliancePop ? "pop" : ""}">${allAllianceAttacks.length}</span>
         </button>
         <button id="fmz-gb-convoy-fab" class="fmz-gb-fab convoy ${isConvoyOpen ? "active" : ""}" type="button" title="Demandes et convois">
           <span>🚚 Convois</span>
-          <span class="fmz-gb-pill">${openRequestsCount}</span>
+          <span class="fmz-gb-pill ${convoyPop ? "pop" : ""}">${openRequestsCount}</span>
         </button>
-        <button id="fmz-gb-fab" class="fmz-gb-fab ${incomingAttacks.length > 0 ? "alert" : ""}" type="button" title="Résumé Dôme de la Paix">
+        <button id="fmz-gb-fab" class="fmz-gb-fab ${incomingAttacks.length > 0 ? "alert" : ""} ${hasImminentAttack ? "radar" : ""}" type="button" title="Résumé Dôme de la Paix">
           <span>Dôme</span>
-          <span class="fmz-gb-pill">${domeBadge}</span>
+          <span class="fmz-gb-pill ${domePop ? "pop" : ""}">${domeBadge}</span>
         </button>
       </div>
     `;
     lastRootSig = rootSig;
+
+    root.querySelectorAll(".fmz-gb-btn").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        btn.classList.remove("clicked");
+        void btn.offsetWidth;
+        btn.classList.add("clicked");
+      });
+    });
 
     root.querySelector("#fmz-gb-players-fab").onclick = () => {
       const next = !isPlayersBubbleOpen();
@@ -4956,6 +5229,9 @@
         selectedPlayerTab = "overview";
         setStatsBubbleOpen(false);
         setPlayersBubbleOpen(true);
+        setGlobalBubbleOpen(false);
+        setConvoyBubbleOpen(false);
+        setAllianceBubbleOpen(false);
         renderGlobalBubble(true);
       };
     });
@@ -4967,22 +5243,29 @@
       };
     });
 
-    const closePlayersListBtn = root.querySelector("#fmz-gb-pl-list-close");
-    if (closePlayersListBtn) {
-      closePlayersListBtn.onclick = () => {
+    const plCloseBtn = root.querySelector("#fmz-gb-pl-close");
+    if (plCloseBtn) {
+      plCloseBtn.onclick = () => {
         selectedPlayerKey = "";
         selectedPlayerTab = "overview";
+        setPlayersBubbleOpen(false);
+        setStatsBubbleOpen(true);
+        renderGlobalBubble(true);
+      };
+    }
+
+    const plListCloseBtn = root.querySelector("#fmz-gb-pl-list-close");
+    if (plListCloseBtn) {
+      plListCloseBtn.onclick = () => {
         setPlayersBubbleOpen(false);
         renderGlobalBubble(true);
       };
     }
 
-    const closePlayersBtn = root.querySelector("#fmz-gb-pl-close");
-    if (closePlayersBtn) {
-      closePlayersBtn.onclick = () => {
-        selectedPlayerKey = "";
-        selectedPlayerTab = "overview";
-        setPlayersBubbleOpen(false);
+    const stCloseBtn = root.querySelector("#fmz-gb-st-close");
+    if (stCloseBtn) {
+      stCloseBtn.onclick = () => {
+        setStatsBubbleOpen(false);
         renderGlobalBubble(true);
       };
     }
@@ -4991,37 +5274,21 @@
       const next = !isAllianceBubbleOpen();
       setAllianceBubbleOpen(next);
       if (next) {
-        setPlayersBubbleOpen(false);
         setGlobalBubbleOpen(false);
         setConvoyBubbleOpen(false);
+        setPlayersBubbleOpen(false);
         setStatsBubbleOpen(false);
       }
       renderGlobalBubble(true);
     };
 
-    root.querySelector("#fmz-gb-fab").onclick = () => {
-      const next = !isGlobalBubbleOpen();
-      setGlobalBubbleOpen(next);
-      if (next) {
-        setPlayersBubbleOpen(false);
-        setConvoyBubbleOpen(false);
+    const alCloseBtn = root.querySelector("#fmz-gb-al-close");
+    if (alCloseBtn) {
+      alCloseBtn.onclick = () => {
         setAllianceBubbleOpen(false);
-        setStatsBubbleOpen(false);
-      }
-      renderGlobalBubble(true);
-    };
-
-    root.querySelector("#fmz-gb-convoy-fab").onclick = () => {
-      const next = !isConvoyBubbleOpen();
-      setConvoyBubbleOpen(next);
-      if (next) {
-        setPlayersBubbleOpen(false);
-        setGlobalBubbleOpen(false);
-        setAllianceBubbleOpen(false);
-        setStatsBubbleOpen(false);
-      }
-      renderGlobalBubble(true);
-    };
+        renderGlobalBubble(true);
+      };
+    }
 
     root.querySelectorAll("[data-al-filter]").forEach((btn) => {
       btn.onclick = () => {
@@ -5037,33 +5304,41 @@
       };
     });
 
-    const closeStatsBtn = root.querySelector("#fmz-gb-st-close");
-    if (closeStatsBtn) {
-      closeStatsBtn.onclick = () => {
-        setStatsBubbleOpen(false);
-        renderGlobalBubble(true);
-      };
-    }
-
-    const closeAllianceBtn = root.querySelector("#fmz-gb-al-close");
-    if (closeAllianceBtn) {
-      closeAllianceBtn.onclick = () => {
+    root.querySelector("#fmz-gb-fab").onclick = () => {
+      const next = !isGlobalBubbleOpen();
+      setGlobalBubbleOpen(next);
+      if (next) {
+        setConvoyBubbleOpen(false);
         setAllianceBubbleOpen(false);
-        renderGlobalBubble(true);
-      };
-    }
+        setPlayersBubbleOpen(false);
+        setStatsBubbleOpen(false);
+      }
+      renderGlobalBubble(true);
+    };
 
-    const closeDomeBtn = root.querySelector("#fmz-gb-close");
-    if (closeDomeBtn) {
-      closeDomeBtn.onclick = () => {
+    root.querySelector("#fmz-gb-convoy-fab").onclick = () => {
+      const next = !isConvoyBubbleOpen();
+      setConvoyBubbleOpen(next);
+      if (next) {
+        setGlobalBubbleOpen(false);
+        setAllianceBubbleOpen(false);
+        setPlayersBubbleOpen(false);
+        setStatsBubbleOpen(false);
+      }
+      renderGlobalBubble(true);
+    };
+
+    const closeBtn = root.querySelector("#fmz-gb-close");
+    if (closeBtn) {
+      closeBtn.onclick = () => {
         setGlobalBubbleOpen(false);
         renderGlobalBubble(true);
       };
     }
 
-    const closeConvoyBtn = root.querySelector("#fmz-gb-cv-close");
-    if (closeConvoyBtn) {
-      closeConvoyBtn.onclick = () => {
+    const cvCloseBtn = root.querySelector("#fmz-gb-cv-close");
+    if (cvCloseBtn) {
+      cvCloseBtn.onclick = () => {
         setConvoyBubbleOpen(false);
         renderGlobalBubble(true);
       };
@@ -5072,62 +5347,53 @@
     const refreshBtn = root.querySelector("#fmz-gb-refresh");
     if (refreshBtn) {
       refreshBtn.onclick = async () => {
-        setSyncState("syncing", "Synchro…");
         renderGlobalBubble(true);
-        checkScriptUpdate(true);
         await pullFromWorker(true);
-        runPageCycle(true);
+        await checkScriptUpdate(true);
+        renderGlobalBubble(true);
       };
     }
 
     const accBtn = root.querySelector("#fmz-gb-acc");
     if (accBtn) {
       accBtn.onclick = () => {
-        if (isSessionLocked()) return;
         accountDrawerOpen = !accountDrawerOpen;
         renderGlobalBubble(true);
       };
     }
 
     const savePseudoBtn = root.querySelector("#fmz-gb-pseudo-save");
-    const pseudoInp = root.querySelector("#fmz-gb-pseudo-input");
-    const logoutBtn = root.querySelector("#fmz-gb-logout-btn");
-
-    if (savePseudoBtn && pseudoInp) {
-      const submitPseudo = () => {
-        if (isSessionLocked()) return;
-        setDevUser(pseudoInp.value);
-        accountDrawerOpen = false;
-        runPageCycle(true);
-        pullFromWorker(true).then((changed) => {
-          if (changed) runPageCycle(true);
-          else renderGlobalBubble(true);
-        });
-      };
-      savePseudoBtn.onclick = submitPseudo;
-      pseudoInp.addEventListener("keydown", (e) => {
-        if (e.key === "Enter") {
-          e.preventDefault();
-          submitPseudo();
+    if (savePseudoBtn) {
+      savePseudoBtn.onclick = async () => {
+        const inp = root.querySelector("#fmz-gb-pseudo-input");
+        if (inp && inp.value.trim()) {
+          setDevUser(inp.value.trim());
+          accountDrawerOpen = false;
+          renderGlobalBubble(true);
+          await pullFromWorker(true);
+          renderGlobalBubble(true);
         }
-      });
+      };
     }
 
+    const logoutBtn = root.querySelector("#fmz-gb-logout-btn");
     if (logoutBtn) {
       logoutBtn.onclick = () => {
-        if (isSessionLocked()) return;
-        resetAccountSession(pseudoInp ? pseudoInp.value : "");
-        accountDrawerOpen = false;
-        runPageCycle(true);
+        const inp = root.querySelector("#fmz-gb-pseudo-input");
+        const nextName = inp && inp.value.trim() ? inp.value.trim() : "";
+        resetAccountSession(nextName);
+        renderGlobalBubble(true);
       };
     }
 
     root.querySelectorAll("[data-toggle-sec]").forEach((hdr) => {
       hdr.onclick = () => {
         const key = hdr.getAttribute("data-toggle-sec");
-        if (key) {
-          toggleSectionCollapsed(key);
-          renderGlobalBubble(true);
+        if (!key) return;
+        const isNowCollapsed = toggleSectionCollapsed(key);
+        const secEl = hdr.closest(".fmz-gb-sec");
+        if (secEl) {
+          secEl.classList.toggle("collapsed", isNowCollapsed);
         }
       };
     });
@@ -5137,143 +5403,132 @@
     }
   }
 
-  function tickCountdowns() {
-    const tNow = Date.now();
-    let expired = false;
-    document.querySelectorAll("[data-cd]").forEach((el) => {
-      const arr = Number(el.getAttribute("data-cd") || 0);
-      const left = Math.ceil((arr - tNow) / 1000);
-      if (left <= 0) expired = true;
-      else el.textContent = formatDuration(left);
-    });
-    if (expired) runPageCycle();
-  }
+  function tickGlobalBubbleCountdowns() {
+    const now = Date.now();
+    const els = document.querySelectorAll("#fmz-gb-root [data-cd]");
+    if (!els.length) return;
 
-  function observeBodyMutations() {
-    if (!document.body || document.body.dataset.fmzBodyObserver === "1") return;
-    document.body.dataset.fmzBodyObserver = "1";
-    const obs = new MutationObserver(() => {
-      if (
-        !document.getElementById("fmz-gb-left-dock") ||
-        !document.getElementById("fmz-gb-root") ||
-        ((IS_ATTACK_PAGE || IS_COMMERCE) && !document.getElementById("fmz-armee-badge-wrap"))
-      ) {
-        lastLeftDockSig = "";
-        lastRootSig = "";
-        runPageCycle(true);
+    let anyExpired = false;
+    els.forEach((el) => {
+      const targetTs = Number(el.getAttribute("data-cd") || 0);
+      const diffMs = targetTs - now;
+      if (diffMs <= 0) {
+        anyExpired = true;
+        el.textContent = "0h 0m 0s";
+      } else {
+        const sec = Math.ceil(diffMs / 1000);
+        el.textContent = formatDuration(sec);
+        el.classList.toggle("critical", sec <= 15 * 60);
+        el.classList.toggle("warn", sec > 15 * 60 && sec <= 30 * 60);
       }
     });
-    obs.observe(document.body, { childList: true, subtree: false });
+
+    if (anyExpired) {
+      checkFinishedConvoysCelebration(now);
+      if (IS_HUNT_PAGE) reconcileHunts();
+      if (IS_ATTACK_PAGE) reconcileArmeeAttacks();
+      if (IS_COMMERCE) reconcileCommerceConvoys();
+      renderGlobalBubble(true);
+    }
   }
 
-  function runPageCycle(forceScrape = false) {
-    if (!ensureContainersAttached()) return;
-    observeBodyMutations();
+  let rescanTimer = null;
+
+  function runPageScans(forceScan = false) {
+    ensureContainersAttached();
     removeLegacyRessourcesPanel();
-    if (isMembersPageView()) {
-      scrapeAllianceMembersTdc(forceScrape);
-    }
+    scrapeAllianceMembersTdc(forceScan);
     if (IS_CONSTRUCTION) {
-      scrapeConstructionPage(forceScrape);
-    } else if (IS_LABORATOIRE) {
-      scrapeLaboratoirePage(forceScrape);
+      scrapeConstructionPage(forceScan);
+    }
+    if (IS_LABORATOIRE) {
+      scrapeLaboratoirePage(forceScan);
     }
     if (IS_HUNT_PAGE) {
       reconcileHunts();
-      if (IS_ACQUERIR_TERRAIN) {
-        updateAcquerirTerrainPreview();
-        setupAcquerirTerrainGuard();
-      }
-    } else if (IS_ATTACK_PAGE) {
-      ensureArmeeIndicator();
+    }
+    if (IS_ACQUERIR_TERRAIN) {
+      setupAcquerirTerrainGuard();
+    }
+    if (IS_ATTACK_PAGE) {
       reconcileArmeeAttacks();
-    } else if (IS_COMMERCE) {
-      ensureArmeeIndicator();
+    }
+    if (IS_COMMERCE) {
       consumePendingCommerceFillIfNeeded();
       reconcileCommerceConvoys();
     }
-    renderGlobalBubble();
+    renderGlobalBubble(forceScan);
   }
 
-  cleanAllianceTdcMap();
-  runPageCycle(true);
-  consumePendingCommerceFillIfNeeded();
-  checkScriptUpdate(false);
-  pullFromWorker(true).then((changed) => {
-    if (changed) runPageCycle();
-    else renderGlobalBubble();
-  });
+  function scheduleDomRescan() {
+    if (rescanTimer) clearTimeout(rescanTimer);
+    rescanTimer = setTimeout(() => {
+      runPageScans(false);
+    }, 350);
+  }
 
-  setInterval(tickCountdowns, 1000);
+  function init() {
+    cleanAllianceTdcMap();
+    ensureContainersAttached();
+    removeLegacyRessourcesPanel();
+    runPageScans(true);
 
-  setInterval(() => {
-    const active = document.activeElement;
-    if (
-      active &&
-      (active.id === "fmz-gb-pseudo-input" ||
-        (active.closest && active.closest("#fmz-gb-root")))
-    ) {
-      return;
-    }
-    runPageCycle();
-  }, 5000);
+    setTimeout(() => runPageScans(true), 600);
+    setTimeout(() => runPageScans(true), 1600);
 
-  setInterval(() => {
-    if (document.hidden) return;
-    const active = document.activeElement;
-    if (active && active.closest && active.closest("#fmz-gb-root")) return;
-    checkScriptUpdate(false);
-    pullFromWorker(false).then((changed) => {
-      if (changed) runPageCycle();
-      else renderGlobalBubble();
-    });
-  }, 15000);
+    setInterval(tickGlobalBubbleCountdowns, 1000);
+    setInterval(() => {
+      checkFinishedConvoysCelebration(Date.now());
+      if (isMembersPageView()) scrapeAllianceMembersTdc(false);
+      if (IS_CONSTRUCTION) scrapeConstructionPage(false);
+      if (IS_LABORATOIRE) scrapeLaboratoirePage(false);
+      if (IS_HUNT_PAGE) reconcileHunts();
+      if (IS_ATTACK_PAGE) reconcileArmeeAttacks();
+      if (IS_COMMERCE) reconcileCommerceConvoys();
+      renderGlobalBubble(false);
+    }, 15000);
 
-  document.addEventListener("visibilitychange", () => {
-    if (!document.hidden) {
-      runPageCycle();
-      pullFromWorker(false).then((changed) => {
-        if (changed) runPageCycle();
-        else renderGlobalBubble();
+    if (document.body) {
+      const observer = new MutationObserver((mutations) => {
+        const isExternalChange = mutations.some((m) => {
+          const target = m.target;
+          return !(target && target.closest && (target.closest("#fmz-gb-root") || target.closest("#fmz-gb-left-dock") || target.closest("#fmz-armee-badge-wrap") || target.closest("#fmz-celebration-layer")));
+        });
+        if (isExternalChange) {
+          scheduleDomRescan();
+        }
       });
+      observer.observe(document.body, { childList: true, subtree: true });
     }
-  });
 
-  document.addEventListener("submit", () => {
-    setTimeout(() => runPageCycle(true), 150);
-    setTimeout(() => runPageCycle(true), 600);
-  }, true);
+    setTimeout(() => {
+      checkScriptUpdate(false);
+    }, 2500);
+    setInterval(() => {
+      checkScriptUpdate(false);
+    }, 15 * 60 * 1000);
 
-  window.addEventListener("pageshow", () => {
-    lastLeftDockSig = "";
-    lastRootSig = "";
-    lastMembersTableSig = "";
-    lastConstructionSig = "";
-    lastLaboSig = "";
-    runPageCycle(true);
-  });
+    pullFromWorker(true).then((changed) => {
+      if (changed) renderGlobalBubble(true);
+    });
+    setInterval(async () => {
+      if (document.hidden) return;
+      const changed = await pullFromWorker(false);
+      if (changed) renderGlobalBubble(true);
+    }, 60000);
 
-  window.addEventListener("storage", (e) => {
-    if (e.key === STORAGE_KEYS.convoyRequests) {
-      convoyRequests = readJsonArray(STORAGE_KEYS.convoyRequests);
-    }
-    if (
-      e.key === STORAGE_KEYS.attacks ||
-      e.key === STORAGE_KEYS.hunts ||
-      e.key === STORAGE_KEYS.movements ||
-      e.key === STORAGE_KEYS.devUser ||
-      e.key === STORAGE_KEYS.convoyRequests ||
-      e.key === STORAGE_KEYS.bubbleOpen ||
-      e.key === STORAGE_KEYS.convoyBubbleOpen ||
-      e.key === STORAGE_KEYS.allianceBubbleOpen ||
-      e.key === STORAGE_KEYS.statsBubbleOpen ||
-      e.key === STORAGE_KEYS.playersBubbleOpen ||
-      e.key === STORAGE_KEYS.bubbleSections ||
-      e.key === STORAGE_KEYS.allianceTdc ||
-      e.key === STORAGE_KEYS.allianceStats ||
-      e.key === STORAGE_KEYS.playerProfiles
-    ) {
-      runPageCycle();
-    }
-  });
+    document.addEventListener("visibilitychange", async () => {
+      if (!document.hidden) {
+        runPageScans(true);
+        const changed = await pullFromWorker(false);
+        if (changed) renderGlobalBubble(true);
+      }
+    });
+  }
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", init);
+  } else {
+    init();
+  }
 })();
