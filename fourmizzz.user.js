@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Le Dôme De La Paix - Fourmizzz S5 (Ressources, Armee, Commerce & Alliance)
 // @namespace    https://s5.fourmizzz.fr/
-// @version      0.5.72-worker
+// @version      0.5.75-worker
 // @updateURL    https://raw.githubusercontent.com/LDDLP/applizze-script/main/fourmizzz.user.js
 // @downloadURL  https://raw.githubusercontent.com/LDDLP/applizze-script/main/fourmizzz.user.js
 // @description  Outils d'alliance centralisés sur S5 : chasses en tête du Dôme avec TDC + chassé, attaques compactes avec filtres et tri, TDC attaquant/cible en rouge/vert, règle 50%-300% / 20% max, convois, fiche joueur dédiée et import auto construction/laboratoire.
@@ -22,7 +22,7 @@
   const HOST = window.location.hostname.toLowerCase();
   if (HOST !== "s5.fourmizzz.fr") return;
 
-  const SCRIPT_VERSION = "0.5.72-worker";
+  const SCRIPT_VERSION = "0.5.75-worker";
 
   const PATH = window.location.pathname.toLowerCase();
   const HREF = window.location.href.toLowerCase();
@@ -1027,20 +1027,16 @@
     const baseTargetTdc = getPlayerTdc(targetPseudo);
     const baseAttackerTdc = getPlayerTdc(attackerPseudo);
 
-    const projTargetTdc =
-      sim.finalTdc && sim.finalTdc.has(targetNorm) && sim.finalTdc.get(targetNorm) != null
-        ? sim.finalTdc.get(targetNorm)
-        : baseTargetTdc;
-    const projAttackerTdc =
-      sim.finalTdc && sim.finalTdc.has(attackerNorm) && sim.finalTdc.get(attackerNorm) != null
-        ? sim.finalTdc.get(attackerNorm)
-        : baseAttackerTdc;
+    // La portée actuelle se calcule avec les TDC actuels, sans appliquer les mouvements futurs.
+    const projTargetTdc = baseTargetTdc;
+    const projAttackerTdc = baseAttackerTdc;
 
     const targetVa = getPlayerAttackSpeed(targetPseudo);
     const attackerVa = getPlayerAttackSpeed(attackerPseudo);
     const travel = estimateAttackTravelSeconds(attackerPseudo, targetPseudo, attackerVa);
     const arrivalAt = travel ? nowMs + travel.seconds * 1000 : null;
-    const arrivalSim = arrivalAt ? simulateTimeline(nowMs, [], arrivalAt) : null;
+    // Seuls les mouvements arrivant strictement avant notre attaque sont pris en compte.
+    const arrivalSim = arrivalAt ? simulateTimeline(nowMs, [], arrivalAt - 1) : null;
     const arrivalTargetTdc = arrivalSim && arrivalSim.finalTdc.has(targetNorm)
       ? arrivalSim.finalTdc.get(targetNorm) : baseTargetTdc;
     const arrivalAttackerTdc = arrivalSim && arrivalSim.finalTdc.has(attackerNorm)
@@ -1049,11 +1045,25 @@
       ? Math.round((arrivalTargetTdc / arrivalAttackerTdc) * 100) : null;
     const arrivalAttackable = arrivalRatioPct == null ? null
       : arrivalTargetTdc >= arrivalAttackerTdc * 0.5 && arrivalTargetTdc <= arrivalAttackerTdc * 3;
+    const currentRatioPct = projTargetTdc > 0 && projAttackerTdc > 0
+      ? Math.round((projTargetTdc / projAttackerTdc) * 100) : null;
+    const currentAttackable = currentRatioPct == null ? null
+      : projTargetTdc >= projAttackerTdc * 0.5 && projTargetTdc <= projAttackerTdc * 3;
+    const safeToAttack = currentAttackable === false || arrivalAttackable === false
+      ? false
+      : (currentAttackable === true && arrivalAttackable === true ? true : null);
+    const safeReason = safeToAttack === true
+      ? "À portée maintenant et encore à portée à ton arrivée"
+      : safeToAttack === false
+        ? (currentAttackable === false ? "Hors de portée actuellement" : "Risque d'échec à ton arrivée")
+        : (!travel ? "Coordonnées ou VA manquantes" : "TDC insuffisant pour vérifier la sécurité de l'attaque");
 
     if (!projTargetTdc || projTargetTdc <= 0 || !projAttackerTdc || projAttackerTdc <= 0) {
       return {
-        attackable: null,
-        ratioPct: null,
+        attackable: currentAttackable,
+        ratioPct: currentRatioPct,
+        safeToAttack,
+        safeReason,
         baseTargetTdc,
         projTargetTdc,
         baseAttackerTdc,
@@ -1092,8 +1102,10 @@
     }
 
     return {
-      attackable: inRange,
-      ratioPct,
+      attackable: currentAttackable,
+      ratioPct: currentRatioPct,
+      safeToAttack,
+      safeReason,
       baseTargetTdc,
       projTargetTdc,
       baseAttackerTdc,
@@ -3450,17 +3462,32 @@
       .fmz-gb-actions button{flex:1}
       .fmz-gb-msg{margin-top:6px;font-size:11px;color:#6ee7b7}
       .fmz-gb-msg.warn{color:#fca5a5}
+      .fmz-gb-player-list{
+        display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));
+        gap:7px;align-items:stretch;
+      }
       .fmz-gb-player{
         display:flex;justify-content:space-between;align-items:center;gap:6px;
-        width:100%;background:rgba(9,15,28,.86) !important;color:#f1f5f9 !important;
-        border:1px solid rgba(56,189,248,.18);border-radius:8px;padding:7px 9px;margin-bottom:5px;
+        min-width:0;min-height:48px;width:100%;margin:0;
+        background:rgba(9,15,28,.86) !important;color:#f1f5f9 !important;
+        border:1px solid rgba(56,189,248,.18);border-radius:8px;padding:7px 8px;
         cursor:pointer;font-size:12px;text-align:left;
         transition:border-color .12s ease,background .12s ease;
       }
       .fmz-gb-player:hover{background:rgba(15,23,42,.96) !important;border-color:#22d3ee}
       .fmz-gb-player.me{border-left:3px solid #34d399}
       .fmz-gb-player.attacked{border-left:3px solid #f87171}
-      .fmz-gb-player-tdc{color:#94a3b8;font-size:11px;margin-left:6px}
+      .fmz-gb-player-main{display:flex;flex-direction:column;gap:3px;min-width:0;overflow:hidden}
+      .fmz-gb-player-main b{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+      .fmz-gb-player-side{display:flex;align-items:center;gap:5px;flex-shrink:0}
+      .fmz-gb-player-tdc{color:#94a3b8;font-size:10px}
+      .fmz-gb-safe-dot{
+        display:inline-block;flex:0 0 12px;width:12px;height:12px;border-radius:50%;
+        border:1px solid rgba(148,163,184,.45);background:#64748b;
+      }
+      .fmz-gb-safe-dot.ok{background:#22c55e;border-color:#86efac;box-shadow:0 0 8px rgba(34,197,94,.65)}
+      .fmz-gb-safe-dot.no{background:#ef4444;border-color:#fca5a5;box-shadow:0 0 8px rgba(239,68,68,.55)}
+      .fmz-gb-safe-dot.na{background:#64748b;border-color:#cbd5e1}
       .fmz-gb-atk-dot{
         display:inline-flex;align-items:center;justify-content:center;
         min-width:18px;height:18px;padding:0 5px;border-radius:999px;
@@ -4188,12 +4215,8 @@
             .map((p) => {
               const isMe = p.key === meKey;
               const ev = p.attackEval || {};
-              const dotClass = ev.attackable === true ? "ok" : (ev.attackable === false ? "no" : "na");
-              const dotTxt = isMe
-                ? "MOI"
-                : (ev.attackable === true ? "OK" : (ev.attackable === false ? "NON" : "?"));
-              const arrivalDotClass = ev.arrivalAttackable === true ? "ok" : (ev.arrivalAttackable === false ? "no" : "na");
-              const arrivalDotTxt = isMe ? "MOI" : (ev.arrivalAttackable === true ? "ARR. OK" : (ev.arrivalAttackable === false ? "ARR. NON" : "ARR. ?"));
+              const safeDotClass = isMe ? "na" : (ev.safeToAttack === true ? "ok" : (ev.safeToAttack === false ? "no" : "na"));
+              const safeDotTitle = isMe ? "Ton compte" : (ev.safeReason || "Sécurité de l'attaque inconnue");
               const tdcTxt = p.tdc ? `${formatNumber(p.tdc)} cm²` : "TDC ?";
               const metaBits = [];
               if (p.count > 0) metaBits.push(`⚔️${p.count}`);
@@ -4203,14 +4226,13 @@
                 : "";
               return `
                 <button class="fmz-gb-player ${isMe ? "me" : ""} ${p.count > 0 ? "attacked" : ""}" data-pl-select="${esc(p.key)}" type="button">
-                  <span>
-                    <b>${esc(p.name)}</b>${isMe ? " (moi)" : ""}
-                    <span class="fmz-gb-player-tdc">· ${esc(tdcTxt)}</span>
+                  <span class="fmz-gb-player-main">
+                    <b>${esc(p.name)}</b>
+                    <span class="fmz-gb-player-tdc">${esc(tdcTxt)}</span>
                   </span>
-                  <span style="display:flex;align-items:center;gap:5px">
-                    <span class="fmz-gb-atk-dot ${dotClass}" title="${esc(ev.reason || "")}">${esc(dotTxt)}</span>
-                    ${isMe ? "" : `<span class="fmz-gb-atk-dot ${arrivalDotClass}" title="${esc(ev.arrivalReason || "")}${ev.travelSec != null ? ` · trajet ${formatDuration(ev.travelSec)}` : ""}">${arrivalDotTxt}</span>`}
+                  <span class="fmz-gb-player-side">
                     ${rightMeta}
+                    <span class="fmz-gb-safe-dot ${safeDotClass}" title="${esc(safeDotTitle)}" aria-label="${esc(safeDotTitle)}"></span>
                   </span>
                 </button>
               `;
@@ -4233,10 +4255,12 @@
           </div>
 
           <div class="fmz-gb-summary">
-            Règle <b>50%–300%</b> vs <b>${esc(devUser)}</b> : voyant 1 = situation actuelle · voyant 2 = situation estimée à l’arrivée (VA + distance + mouvements connus).
+            <b>Voyant vert :</b> cible à portée maintenant et attaque toujours sûre à ton arrivée, après les mouvements connus.<br>
+            <b>Voyant rouge :</b> hors de portée maintenant ou risque d'échec à l'arrivée.<br>
+            <b>Voyant gris :</b> données insuffisantes pour vérifier.
           </div>
 
-          <div>${listHtml}</div>
+          <div class="fmz-gb-player-list">${listHtml}</div>
         </div>
       `;
     }
@@ -4261,14 +4285,9 @@
         }
       });
 
-      const dotClass = atkEval.attackable === true ? "ok" : (atkEval.attackable === false ? "no" : "na");
-      const dotText = atkEval.attackable === true ? "ATTAQUABLE" : (atkEval.attackable === false ? "NON ATTAQUABLE" : "TDC ?");
-      const attackStatusBadge = isMe
-        ? `<span class="fmz-gb-atk-dot na">MOI</span>`
-        : `<span class="fmz-gb-atk-dot ${dotClass}">${dotText}</span>`;
-      const arrivalDotClass = atkEval.arrivalAttackable === true ? "ok" : (atkEval.arrivalAttackable === false ? "no" : "na");
-      const arrivalDotText = atkEval.arrivalAttackable === true ? "ATTAQUABLE À L'ARRIVÉE" : (atkEval.arrivalAttackable === false ? "NON ATTAQUABLE À L'ARRIVÉE" : "ARRIVÉE INCONNUE");
-      const arrivalStatusBadge = isMe ? "" : `<span class="fmz-gb-atk-dot ${arrivalDotClass}" title="${esc(atkEval.arrivalReason || "")}">${arrivalDotText}</span>`;
+      const safeDotClass = isMe ? "na" : (atkEval.safeToAttack === true ? "ok" : (atkEval.safeToAttack === false ? "no" : "na"));
+      const safeDotText = isMe ? "TON COMPTE" : (atkEval.safeToAttack === true ? "ATTAQUE SÛRE" : (atkEval.safeToAttack === false ? "RISQUE D'ÉCHEC" : "VÉRIFICATION IMPOSSIBLE"));
+      const attackStatusBadge = `<span class="fmz-gb-atk-dot ${safeDotClass}">${safeDotText}</span>`;
       const arrivalInfoHtml = !isMe
         ? `<div style="margin-top:5px">🚀 Trajet estimé : <b>${atkEval.travelSec != null ? formatDuration(atkEval.travelSec) : "indisponible"}</b>${atkEval.distance != null ? ` · Distance : <b>${atkEval.distance.toFixed(2)}</b>` : ""}${atkEval.arrivalAt ? ` · Arrivée : <b>${new Date(atkEval.arrivalAt).toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" })}</b>` : ""}<br>📊 TDC estimés à l'arrivée : <b>${atkEval.arrivalTargetTdc != null ? formatNumber(atkEval.arrivalTargetTdc) : "?"}</b> vs <b>${atkEval.arrivalAttackerTdc != null ? formatNumber(atkEval.arrivalAttackerTdc) : "?"}</b> cm² (${atkEval.arrivalRatioPct != null ? `${atkEval.arrivalRatioPct}%` : "ratio inconnu"})</div>`
         : "";
@@ -4286,9 +4305,9 @@
         <div class="fmz-gb-summary">
           <div style="display:flex;justify-content:space-between;align-items:center;gap:6px;margin-bottom:6px">
             <b>🎯 Règle 50%–300% (vs ${esc(devUser)})</b>
-            <div style="display:flex;flex-wrap:wrap;gap:5px;justify-content:flex-end">${attackStatusBadge}${arrivalStatusBadge}</div>
+            <div style="display:flex;flex-wrap:wrap;gap:5px;justify-content:flex-end">${attackStatusBadge}</div>
           </div>
-          <div>${esc(atkEval.reason)}</div>
+          <div>${esc(atkEval.safeReason || atkEval.reason)}</div>
           ${arrivalInfoHtml}
           <div class="fmz-gb-tdc-line">${tdcBadgeHtml}</div>
           <div style="margin-top:6px">
