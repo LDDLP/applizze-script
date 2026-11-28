@@ -4316,6 +4316,9 @@
         ${activeTabContent}
       </div>
     `;
+    }
+
+    return "";
   }
 
   function renderGlobalBubble(forceRender = false) {
