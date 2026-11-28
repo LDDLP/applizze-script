@@ -3462,6 +3462,18 @@
       .fmz-gb-actions button{flex:1}
       .fmz-gb-msg{margin-top:6px;font-size:11px;color:#6ee7b7}
       .fmz-gb-msg.warn{color:#fca5a5}
+      .fmz-gb-dashboard-grid{
+        display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:5px;align-items:stretch;
+      }
+      .fmz-gb-dashboard-player{
+        display:flex;align-items:center;gap:6px;min-width:0;width:100%;margin:0;
+        padding:7px 8px;background:rgba(9,15,28,.86) !important;color:#f1f5f9 !important;
+        border:1px solid rgba(56,189,248,.18);border-radius:8px;cursor:pointer;text-align:left;
+      }
+      .fmz-gb-dashboard-player:hover{border-color:#22d3ee;background:rgba(15,23,42,.96) !important}
+      .fmz-gb-dashboard-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;font-weight:700}
+      .fmz-gb-dashboard-meta{font-size:9px;color:#94a3b8;white-space:nowrap}
+      .fmz-gb-dashboard-player .fmz-gb-safe-dot{flex:0 0 10px;width:10px;height:10px}
       .fmz-gb-player-list{
         display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));
         gap:7px;align-items:stretch;
@@ -3529,6 +3541,8 @@
       .fmz-gb-lvl-grid{
         display:grid;grid-template-columns:repeat(auto-fill,minmax(155px,1fr));gap:6px;
       }
+      @media(max-width:360px){.fmz-gb-dashboard-grid{grid-template-columns:1fr}}
+
       .fmz-gb-lvl-card{
         background:rgba(9,15,28,.88);border:1px solid rgba(56,189,248,.18);
         border-radius:8px;padding:7px 8px;font-size:11px;
@@ -3618,6 +3632,18 @@
 
   function buildStatsBubbleHtml(devUser, now, collapsedMap) {
     const stats = readAllianceStats();
+    const dashboardPlayers = getKnownPlayers(now);
+    const meKey = normalizePseudo(devUser);
+    const dashboardPlayersHtml = !dashboardPlayers.length
+      ? `<div class="fmz-gb-empty">Aucun joueur disponible. Ouvre la page Membres pour actualiser les données.</div>`
+      : dashboardPlayers.map((p) => {
+          const isMe = p.key === meKey;
+          const ev = p.attackEval || {};
+          const dotClass = isMe ? "na" : (ev.safeToAttack === true ? "ok" : (ev.safeToAttack === false ? "no" : "na"));
+          const dotTitle = isMe ? "Ton compte" : (ev.safeReason || "Vérification impossible");
+          const tdcText = p.tdc ? `${formatNumber(p.tdc)} cm²` : "TDC ?";
+          return `<button class="fmz-gb-dashboard-player ${isMe ? "me" : ""}" data-dashboard-player="${esc(p.key)}" type="button" title="${esc(dotTitle)}"><span class="fmz-gb-dashboard-name">${esc(p.name)}</span><span class="fmz-gb-dashboard-meta">${esc(tdcText)}</span><span class="fmz-gb-safe-dot ${dotClass}" aria-label="${esc(dotTitle)}"></span></button>`;
+        }).join("");
     const tdcMap = readAllianceTdcMap();
     const knownKeys = getKnownAllianceKeys();
     const playersFromMap = Object.entries(tdcMap)
@@ -3686,7 +3712,7 @@
     return `
       <div id="fmz-gb-card">
         <div class="fmz-gb-head">
-          <b>📊 Statistiques ${OWN_ALLIANCE_TAG} · ${esc(devUser)}</b>
+          <b>📊 Tableau de bord ${OWN_ALLIANCE_TAG} · ${esc(devUser)}</b>
           <div class="fmz-gb-head-actions">
             <button id="fmz-gb-refresh" class="fmz-gb-btn" type="button" title="Rafraîchir maintenant">🔄</button>
             <button id="fmz-gb-st-close" class="fmz-gb-btn" type="button" title="Réduire">_</button>
@@ -3705,6 +3731,22 @@
           overviewHtml,
           "in",
           !!collapsedMap.st_overview
+        )}
+
+        <div class="fmz-gb-summary">
+          <b>Voyants d'attaque</b><br>
+          <span style="color:#4ade80;font-weight:800">● Vert :</span> cible à portée maintenant et encore attaquable à ton arrivée, après les mouvements connus.<br>
+          <span style="color:#f87171;font-weight:800">● Rouge :</span> hors de portée actuellement ou risque d'échec à ton arrivée.<br>
+          <span style="color:#94a3b8;font-weight:800">● Gris :</span> données insuffisantes pour vérifier.
+        </div>
+
+        ${renderSectionBlock(
+          "st_players",
+          `🎯 Sécurité des attaques · ${dashboardPlayers.length} joueurs`,
+          dashboardPlayers.length,
+          `<div class="fmz-gb-dashboard-grid">${dashboardPlayersHtml}</div>`,
+          "in",
+          false
         )}
 
         ${renderSectionBlock(
@@ -4214,9 +4256,6 @@
         : players
             .map((p) => {
               const isMe = p.key === meKey;
-              const ev = p.attackEval || {};
-              const safeDotClass = isMe ? "na" : (ev.safeToAttack === true ? "ok" : (ev.safeToAttack === false ? "no" : "na"));
-              const safeDotTitle = isMe ? "Ton compte" : (ev.safeReason || "Sécurité de l'attaque inconnue");
               const tdcTxt = p.tdc ? `${formatNumber(p.tdc)} cm²` : "TDC ?";
               const metaBits = [];
               if (p.count > 0) metaBits.push(`⚔️${p.count}`);
@@ -4232,7 +4271,6 @@
                   </span>
                   <span class="fmz-gb-player-side">
                     ${rightMeta}
-                    <span class="fmz-gb-safe-dot ${safeDotClass}" title="${esc(safeDotTitle)}" aria-label="${esc(safeDotTitle)}"></span>
                   </span>
                 </button>
               `;
@@ -4242,7 +4280,7 @@
       return `
         <div id="fmz-gb-card">
           <div class="fmz-gb-head">
-            <b>👤 Joueurs ${OWN_ALLIANCE_TAG} (${players.length})</b>
+            <b>🏗️ Bâtiments · Joueurs ${OWN_ALLIANCE_TAG} (${players.length})</b>
             <div class="fmz-gb-head-actions">
               <button id="fmz-gb-refresh" class="fmz-gb-btn" type="button" title="Rafraîchir maintenant">🔄</button>
               <button id="fmz-gb-pl-list-close" class="fmz-gb-btn" type="button" title="Réduire">_</button>
@@ -4252,12 +4290,6 @@
           <div class="fmz-gb-status-bar">
             ${renderSyncStatusHtml()}
             <a class="fmz-gb-link" href="${esc(SHORTCUT_LINKS.membersUrl)}">📋 Membres (TDC)</a>
-          </div>
-
-          <div class="fmz-gb-summary">
-            <b>Voyant vert :</b> cible à portée maintenant et attaque toujours sûre à ton arrivée, après les mouvements connus.<br>
-            <b>Voyant rouge :</b> hors de portée maintenant ou risque d'échec à l'arrivée.<br>
-            <b>Voyant gris :</b> données insuffisantes pour vérifier.
           </div>
 
           <div class="fmz-gb-player-list">${listHtml}</div>
@@ -4285,9 +4317,7 @@
         }
       });
 
-      const safeDotClass = isMe ? "na" : (atkEval.safeToAttack === true ? "ok" : (atkEval.safeToAttack === false ? "no" : "na"));
-      const safeDotText = isMe ? "TON COMPTE" : (atkEval.safeToAttack === true ? "ATTAQUE SÛRE" : (atkEval.safeToAttack === false ? "RISQUE D'ÉCHEC" : "VÉRIFICATION IMPOSSIBLE"));
-      const attackStatusBadge = `<span class="fmz-gb-atk-dot ${safeDotClass}">${safeDotText}</span>`;
+      const attackStatusBadge = "";
       const arrivalInfoHtml = !isMe
         ? `<div style="margin-top:5px">🚀 Trajet estimé : <b>${atkEval.travelSec != null ? formatDuration(atkEval.travelSec) : "indisponible"}</b>${atkEval.distance != null ? ` · Distance : <b>${atkEval.distance.toFixed(2)}</b>` : ""}${atkEval.arrivalAt ? ` · Arrivée : <b>${new Date(atkEval.arrivalAt).toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" })}</b>` : ""}<br>📊 TDC estimés à l'arrivée : <b>${atkEval.arrivalTargetTdc != null ? formatNumber(atkEval.arrivalTargetTdc) : "?"}</b> vs <b>${atkEval.arrivalAttackerTdc != null ? formatNumber(atkEval.arrivalAttackerTdc) : "?"}</b> cm² (${atkEval.arrivalRatioPct != null ? `${atkEval.arrivalRatioPct}%` : "ratio inconnu"})</div>`
         : "";
@@ -4526,8 +4556,8 @@
       <a id="fmz-gb-update-fab" class="${updateBtnClass}" href="${esc(SHORTCUT_LINKS.scriptUpdateUrl)}" target="_blank" rel="noopener noreferrer" title="${esc(updateBtnTitle)}">
         <span>${updateBtnLabel}</span>
       </a>
-      <button id="fmz-gb-stats-fab" class="fmz-gb-fab stats ${isStatsOpen ? "active" : ""}" type="button" title="Statistiques de l'alliance">
-        <span>📊 Statistiques</span>
+      <button id="fmz-gb-stats-fab" class="fmz-gb-fab stats ${isStatsOpen ? "active" : ""}" type="button" title="Tableau de bord de l'alliance">
+        <span>📊 Tableau de bord</span>
       </button>
     `;
 
@@ -4573,7 +4603,8 @@
       convoyRequests.map((r) => `${r.id}:${r.status}:${JSON.stringify(r.deliveries || [])}`).join(";"),
       finishedHunts.map((h) => `${h.sig || h.id}:${h.area}`).join(";"),
       simSig,
-      profilesSig
+      profilesSig,
+      isStatsOpen ? JSON.stringify(readAllianceTdcMap()) : ""
     ].join("##");
 
     if (forceRender || leftDockSig !== lastLeftDockSig) {
@@ -4832,8 +4863,8 @@
     root.innerHTML = `
       ${cardHtml}
       <div class="fmz-gb-dock">
-        <button id="fmz-gb-players-fab" class="fmz-gb-fab players ${isPlayersOpen ? "active" : ""}" type="button" title="Pages joueurs">
-          <span>👤</span>
+        <button id="fmz-gb-players-fab" class="fmz-gb-fab players ${isPlayersOpen ? "active" : ""}" type="button" title="Bâtiments et fiches joueurs">
+          <span>🏗️ Bâtiment</span>
         </button>
         <button id="fmz-gb-alliance-fab" class="fmz-gb-fab alliance ${isAllianceOpen ? "active" : ""} ${allAllianceAttacks.length > 0 ? "alert" : ""}" type="button" title="Toutes les attaques de l'alliance">
           <span>🛡️ Alliance</span>
@@ -4864,6 +4895,16 @@
       }
       renderGlobalBubble(true);
     };
+
+    root.querySelectorAll("[data-dashboard-player]").forEach((btn) => {
+      btn.onclick = () => {
+        selectedPlayerKey = btn.getAttribute("data-dashboard-player") || "";
+        selectedPlayerTab = "overview";
+        setStatsBubbleOpen(false);
+        setPlayersBubbleOpen(true);
+        renderGlobalBubble(true);
+      };
+    });
 
     root.querySelectorAll("[data-pl-select]").forEach((btn) => {
       btn.onclick = () => {
